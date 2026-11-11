@@ -4,7 +4,7 @@ use glam::Vec2;
 
 pub const TEX: usize = 64;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u32)]
 pub enum Tex {
     White,
