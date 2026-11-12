@@ -152,6 +152,11 @@ class Builder:
             y = np.clip((1.0 - uv[:, 1] % 1.0) * h, 0, h - 1).astype(int)
             q["atlas"] = px[y, x, :3].astype(np.float64)
             q["skin"] = np.array([bool(test(c)) for c in q["atlas"]])
+            # the cartoon's black outlines, brows and pupils on the head become dark, sunken skin
+            dark = q["atlas"].max(axis=1) < 0.16
+            head = self.bone_w(q, self.subtree("Head")) > 0.5 if "Head" in self.jpos else np.zeros(len(dark), dtype=bool)
+            q["socket"] = dark & head
+            q["skin"] = q["skin"] | q["socket"]
 
     def reskin(self, skin_test):
         self._sample_atlas(skin_test)
@@ -238,7 +243,7 @@ class Builder:
             w = self.bone_w(q, self.subtree(bone))[:, None] * amount
             q["pos"] = q["pos"] * (1 - w) + tgt * w
 
-    def paint(self, skin=(0.7, 0.8, 0.95), tint=(1, 1, 1), veins=0.5, bruise=0.3, blood=(), ember=0.0, char=0.0, glow_veins=0.0, glow_col=(1, 1, 1), seed=0, mottle=0.35, grime=0.35, skin_tex="Skin", gore=0.0):
+    def paint(self, skin=(0.7, 0.8, 0.95), cloth_tint=(1, 1, 1), tint=(1, 1, 1), veins=0.5, bruise=0.3, blood=(), ember=0.0, char=0.0, glow_veins=0.0, glow_col=(1, 1, 1), seed=0, mottle=0.35, grime=0.35, skin_tex="Skin", gore=0.0):
         """Repaint the body. Bare skin moves onto a photo texture (`skin_tex`) coloured `skin` with
         mottling; clothes keep the atlas colours under dirt. Then dark veins, bruising, blood
         around bones, charred skin with glowing cracks, all scaled by `tint`."""
@@ -248,11 +253,20 @@ class Builder:
             col = q["col"]
             for i, p in enumerate(q["pos"]):
                 v = Vector(p) + Vector((seed, seed * 0.7, 0))
-                if q["skin"][i]:
+                if q["socket"][i]:
+                    c = np.array(skin, dtype=np.float64) * np.array([0.32, 0.16, 0.15])
+                elif q["skin"][i]:
                     m = fbm(v * 4.0 + Vector((3, 1, 2)))
                     c = np.array(skin, dtype=np.float64) * (1.0 - mottle * 0.5 + mottle * m) * np.array(tint)
                 else:
-                    c = np.array(tint, dtype=np.float64) * (1.0 - grime * max(0.0, fbm(v * 3.0 + Vector((9, 9, 9))) + 0.3))
+                    # clothing moves onto the fabric photo texture: the atlas colour, faded and
+                    # dirtied (the game's cloth layer averages about 0.6 grey)
+                    a = q["atlas"][i]
+                    lum = float(a @ np.array([0.3, 0.55, 0.15]))
+                    faded = a * 0.6 + lum * 0.4
+                    c = np.clip(faded / 0.6, 0.0, 1.0) * np.array(tint, dtype=np.float64) * np.array(cloth_tint)
+                    c *= 1.0 - grime * max(0.0, fbm(v * 3.0 + Vector((9, 9, 9))) + 0.3)
+                    c *= np.array([0.95, 0.92, 0.86])
                 vn = vein(v, 5.0, 5)
                 c *= 1.0 - veins * vn * np.array([0.55, 0.75, 0.6])
                 b = max(0.0, fbm(v * 2.5))
@@ -347,7 +361,7 @@ class Builder:
 
     def blob(self, center, radius, lobes=5, squash=(1, 1, 1), tex="Flesh", seed=0, mode="surface", color=None, glow=0.0, veins=0.7, rough=0.25, anchor=None):
         bm = bmesh.new()
-        bmesh.ops.create_icosphere(bm, subdivisions=3, radius=1.0)
+        bmesh.ops.create_icosphere(bm, subdivisions=4 if radius > 0.11 else 3, radius=1.0)
         rng = random.Random(seed)
         dirs = [Vector((rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(-1, 1))).normalized() for _ in range(lobes)]
         amps = [rng.uniform(0.15, 0.45) for _ in range(lobes)]
@@ -649,18 +663,22 @@ def write_model(b, out_path):
         if "drop" in q:
             tri = tri[~q["drop"][tri].any(axis=1)]
             q["prim"]["indices"] = g.add(tri.ravel().astype(np.uint32), "idx", 5125, target=34963)
-        sk = q["skin"][tri].all(axis=1)
-        if sk.any():
-            name = "T:" + b.skin_tex
-            mats = g.j.setdefault("materials", [])
+        # every face moves onto photo textures: skin (by majority of its corners) or cloth
+        sk = q["skin"][tri].sum(axis=1) >= 2
+        a["TEXCOORD_0"] = g.add(box_uv(q["pos"], q["nrm"], 2.5).astype(np.float32), "uv", 5126, target=34962)
+        mats = g.j.setdefault("materials", [])
+
+        def mat(name):
             mi = next((i for i, m in enumerate(mats) if m.get("name") == name), None)
             if mi is None:
                 mats.append({"name": name, "pbrMetallicRoughness": {"baseColorFactor": [1, 1, 1, 1], "metallicFactor": 0, "roughnessFactor": 0.8}})
                 mi = len(mats) - 1
-            sa = dict(a)
-            sa["TEXCOORD_0"] = g.add(box_uv(q["pos"], q["nrm"]).astype(np.float32), "uv", 5126, target=34962)
-            q["prim"]["indices"] = g.add(tri[~sk].ravel().astype(np.uint32), "idx", 5125, target=34963)
-            g.j["meshes"][q["mesh"]]["primitives"].append({"attributes": sa, "indices": g.add(tri[sk].ravel().astype(np.uint32), "idx", 5125, target=34963), "material": mi})
+            return mi
+
+        q["prim"]["material"] = mat("T:Cloth")
+        q["prim"]["indices"] = g.add(tri[~sk].ravel().astype(np.uint32), "idx", 5125, target=34963)
+        if sk.any():
+            g.j["meshes"][q["mesh"]]["primitives"].append({"attributes": dict(a), "indices": g.add(tri[sk].ravel().astype(np.uint32), "idx", 5125, target=34963), "material": mat("T:" + b.skin_tex)})
     # new parts, grouped per texture into primitives of the main body mesh
     groups = {}
     for p in b.parts:
@@ -699,6 +717,79 @@ def write_model(b, out_path):
         mesh["primitives"].append({"attributes": attrs, "indices": idx, "material": mi})
     g.save(out_path)
     return total
+
+
+def write_static(parts, out_path):
+    """A plain (unskinned) GLB from parts built without a base model: gibs and props."""
+    setup_cycles()
+    mat = bpy.data.materials.get("bake") or bpy.data.materials.new("bake")
+    objs = [p.obj for p in parts]
+    for ob in objs:
+        if not ob.data.materials:
+            ob.data.materials.append(mat)
+        ca = ob.data.color_attributes.new("AO", "FLOAT_COLOR", "POINT")
+        ob.data.color_attributes.active_color = ca
+    bpy.ops.object.select_all(action="DESELECT")
+    for ob in objs:
+        ob.select_set(True)
+    bpy.context.view_layer.objects.active = objs[0]
+    try:
+        bpy.ops.object.bake(type="AO", target="VERTEX_COLORS")
+    except Exception as ex:
+        print("  AO bake failed:", ex)
+    g = Glb.__new__(Glb)
+    g.j = {"asset": {"version": "2.0", "generator": "strain build_enemies.py"}, "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"name": "gib", "mesh": 0}], "meshes": [{"name": "gib", "primitives": []}], "materials": [], "accessors": [], "bufferViews": [], "buffers": [{"byteLength": 0}]}
+    g.bin = bytearray()
+    groups = {}
+    for p in parts:
+        ob = p.obj
+        if ob.get("flat"):
+            m = ob.modifiers.new("split", "EDGE_SPLIT")
+            m.split_angle = math.radians(30)
+            Builder._apply(None, ob)
+        me = ob.data
+        me.calc_loop_triangles()
+        n = len(me.vertices)
+        pos = np.zeros(n * 3)
+        me.vertices.foreach_get("co", pos)
+        pos = pos.reshape(-1, 3)
+        nrm = np.zeros(n * 3)
+        me.vertices.foreach_get("normal", nrm)
+        nrm = nrm.reshape(-1, 3)
+        tri = np.zeros(len(me.loop_triangles) * 3, dtype=np.int64)
+        me.loop_triangles.foreach_get("vertices", tri)
+        ao = read_ao(ob) if p.ao else np.ones(n)
+        if len(ao) != n:
+            ao = np.ones(n)
+        col = np.ones((n, 4))
+        base = np.array(p.color, dtype=np.float64)
+        for i, q in enumerate(pos):
+            v = Vector(q)
+            c = base * (0.85 + 0.3 * fbm(v * 9.0 + Vector((7, 3, 1))))
+            if p.veins > 0:
+                c = c * (1.0 - p.veins * vein(v, 25.0) * np.array([0.5, 0.75, 0.6]))
+            col[i, :3] = c * (0.3 + 0.7 * min(1.0, ao[i] ** 1.3))
+            col[i, 3] = 1.0 - p.glow
+        groups.setdefault(p.tex, []).append((pos, nrm, box_uv(pos, nrm, 6.0), col, tri))
+    for tex, arrs in groups.items():
+        base, P, N, U, C, T = 0, [], [], [], [], []
+        for (pos, nrm, uv, col, tri) in arrs:
+            P.append(pos)
+            N.append(nrm)
+            U.append(uv)
+            C.append(col)
+            T.append(tri + base)
+            base += len(pos)
+        g.j["materials"].append({"name": "T:" + tex, "pbrMetallicRoughness": {"baseColorFactor": [1, 1, 1, 1], "metallicFactor": 0, "roughnessFactor": 0.6}})
+        attrs = {
+            "POSITION": g.add(np.concatenate(P).astype(np.float32), "pos", 5126, target=34962, minmax=True),
+            "NORMAL": g.add(np.concatenate(N).astype(np.float32), "nrm", 5126, target=34962),
+            "TEXCOORD_0": g.add(np.concatenate(U).astype(np.float32), "uv", 5126, target=34962),
+            "COLOR_0": g.add(np.round(np.clip(np.concatenate(C), 0, 1) * 255), "color", 5121, target=34962),
+        }
+        g.j["meshes"][0]["primitives"].append({"attributes": attrs, "indices": g.add(np.concatenate(T).astype(np.uint32), "idx", 5125, target=34963), "material": len(g.j["materials"]) - 1})
+    g.save(out_path)
+    return sum(len(a[0]) for arrs in groups.values() for a in arrs)
 
 
 def clear_scene():
@@ -768,7 +859,7 @@ def preview(b, path):
             ob.data.materials.append(mat_with(atlas, "atlas"))
         else:
             tname = mname[2:].lower()
-            fn = {"flesh": "leather", "vein": "leather", "growth": "moss_rock", "growthglow": None, "char": "rock", "ember": "lava", "lattice": None, "riftglow": None, "riftstone": "rock", "skin": None}.get(tname, tname)
+            fn = {"flesh": "leather", "vein": "leather", "growth": "moss_rock", "growthglow": None, "char": "rock", "ember": "lava", "lattice": None, "riftglow": None, "riftstone": "rock", "skin": None, "cloth": "fabric"}.get(tname, tname)
             img = None
             if fn and os.path.exists(os.path.join(ROOT, "assets", "textures", fn + ".png")):
                 img = bpy.data.images.load(os.path.join(ROOT, "assets", "textures", fn + ".png"))
@@ -800,18 +891,25 @@ def preview(b, path):
 
 PREVIEW_DIR = None
 # approximate colours the game's texture generator gives each layer (preview only)
-PREVIEW_TINT = {"Skin": (0.85, 0.66, 0.55), "Flesh": (1.3, 0.5, 0.5), "Vein": (0.5, 0.22, 0.3), "Bone": (1.0, 0.95, 0.82), "Chitin": (0.55, 0.45, 0.75), "Growth": (0.6, 0.35, 0.55), "GrowthGlow": (0.25, 0.2, 0.3), "Char": (0.35, 0.35, 0.35), "RiftStone": (0.6, 0.5, 0.9)}
+PREVIEW_TINT = {"Cloth": (0.8, 0.8, 0.8), "Skin": (0.85, 0.66, 0.55), "Flesh": (1.3, 0.5, 0.5), "Vein": (0.5, 0.22, 0.3), "Bone": (1.0, 0.95, 0.82), "Chitin": (0.55, 0.45, 0.75), "Growth": (0.6, 0.35, 0.55), "GrowthGlow": (0.25, 0.2, 0.3), "Char": (0.35, 0.35, 0.35), "RiftStone": (0.6, 0.5, 0.9)}
 
 if __name__ == "__main__":
-    from recipes import RECIPES
+    from recipes import GIBS, RECIPES
 
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if "--preview" in sys.argv:
         PREVIEW_DIR = sys.argv[sys.argv.index("--preview") + 1]
         args = [a for a in args if a != PREVIEW_DIR]
         os.makedirs(PREVIEW_DIR, exist_ok=True)
-    names = args or list(RECIPES)
-    for name in names:
+    names = args or list(RECIPES) + list(GIBS)
+    for name in [n for n in names if n in GIBS]:
+        clear_scene()
+        b = Builder.__new__(Builder)
+        b.name, b.parts, b.rng = name, [], random.Random(GIBS[name][0])
+        GIBS[name][1](b)
+        out = os.path.join(MODELS, name + ".glb")
+        print(f"{name}: {len(b.parts)} parts, {write_static(b.parts, out)} vertices -> {os.path.relpath(out, ROOT)}")
+    for name in [n for n in names if n in RECIPES]:
         base, seed, fn = RECIPES[name]
         clear_scene()
         b = Builder(name, base, seed)

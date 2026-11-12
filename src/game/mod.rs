@@ -195,6 +195,8 @@ pub struct Game {
     /// ground decals: (model id, transform, seconds left)
     pub decals: Vec<(u32, glam::Mat4, f32)>,
     pub debris: Vec<debris::Debris>,
+    /// (position, direction, seconds left) of wounds still spurting after a kill
+    pub bleeders: Vec<(glam::Vec3, glam::Vec3, f32)>,
     pub bug_debris: Vec<Vec3>,
     pub build_start: std::time::Instant,
     pub build_ms: f32,
@@ -304,6 +306,7 @@ impl Game {
             bug_yaw: 0.0,
             decals: Vec::new(),
             debris: Vec::new(),
+            bleeders: Vec::new(),
             bug_debris: Vec::new(),
             build_start: std::time::Instant::now(),
             build_ms: 0.0,

@@ -33,7 +33,9 @@ fn visible(vp: &Mat4, min: Vec3, max: Vec3) -> bool {
 
 impl Game {
     fn pose_for(&self, e: Entity, a: &Actor) -> Pose {
-        let mut p = Pose { flash: a.flash, glow: a.glow, dissolve: a.dissolve, ..Default::default() };
+        // a blow knocks the upper body along it: sharp at first, recovering over a third of a second
+        let flinch = if a.since_hit < 0.4 { (1.0 - a.since_hit / 0.4).powi(2) } else { 0.0 };
+        let mut p = Pose { flash: a.flash, glow: a.glow, dissolve: a.dissolve, flinch, hit_dir: a.hit_dir, ..Default::default() };
         let act = &a.act;
         match act.kind {
             ActKind::Attack => {

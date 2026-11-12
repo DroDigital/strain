@@ -60,6 +60,7 @@ fn zoo_next(g: &mut Game) {
     }
 }
 
+static GORE: std::sync::Mutex<Vec<crate::ecs::Entity>> = std::sync::Mutex::new(Vec::new());
 static FILTER_CLOCK: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
 fn set_filter(g: &mut Game, f: u8) {
@@ -234,6 +235,55 @@ impl AutoTest {
                 v.push(Log("filters done"));
                 v
             }
+            "gore" => vec![
+                Wait(10),
+                Do(|g| {
+                    std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                    g.new_game();
+                    g.tod = 0.42;
+                    let p = crate::world::chunk_center(1, (2, 2)) + Vec3::new(-24.5, 0.0, -10.0);
+                    teleport(g, p);
+                    g.cam.yaw = 0.0;
+                    g.cam.dist = 3.6;
+                    if let Some(a) = g.w.actor.get_mut(g.player) {
+                        a.max_hp = 1e9;
+                        a.hp = 1e9;
+                    }
+                    GORE.lock().unwrap().clear();
+                    for k in 0..4 {
+                        let e = g.spawn_archetype(["rusher", "brute", "rusher", "shielded"][k], p + Vec3::new(k as f32 * 1.3 - 2.0, 0.0, 3.2), 1, 6, None);
+                        if let Some(b) = g.w.body.get_mut(e) { b.yaw = std::f32::consts::PI; }
+                        if let Some(a) = g.w.actor.get_mut(e) { a.speed = 0.0; }
+                        if let Some(ai) = g.w.ai.get_mut(e) { ai.cd = 99.0; ai.think = 99.0; }
+                        GORE.lock().unwrap().push(e);
+                    }
+                }),
+                Wait(20),
+                Do(|g| {
+                    // a non-lethal blow to each: blood, mist, flinch
+                    let subjects = GORE.lock().unwrap().clone();
+                    for e in subjects {
+                        g.deal(e, Some(g.player), 12.0, 0.0, Vec3::new(0.3, 0.0, 1.0).normalize(), crate::game::combat::DmgKind::Melee, 0.0);
+                    }
+                }),
+                Wait(3),
+                Shot("gore_hit"),
+                Wait(20),
+                Do(|g| {
+                    let subjects = GORE.lock().unwrap().clone();
+                    for e in subjects {
+                        g.deal(e, Some(g.player), 9999.0, 0.0, Vec3::new(-0.2, 0.0, 1.0).normalize(), crate::game::combat::DmgKind::Heavy, 0.0);
+                    }
+                    let gibs = g.debris.iter().filter(|d| d.key == crate::game::debris::GIB_KEY).count();
+                    let severed = g.w.rig.iter().filter(|(_, r)| r.skin.as_ref().map(|s| !s.hide.is_empty()).unwrap_or(false)).count();
+                    eprintln!("autotest: gore: gibs {gibs}, bodies with a severed part {severed}, bleeding stumps {}", g.bleeders.len());
+                }),
+                Wait(6),
+                Shot("gore_kill"),
+                Wait(50),
+                Shot("gore_after"),
+                Log("gore done"),
+            ],
             "roam" => vec![
                 Wait(10),
                 Do(|g| {
@@ -296,7 +346,7 @@ impl AutoTest {
                     for (k, name) in ["TrafficCone_1", "TrashBag_1", "CinderBlock"].iter().enumerate() {
                         if let Some(&id) = g.lib.static_id.get(*name) {
                             let pos = p + Vec3::new(1.5 + k as f32 * 0.6, 0.0, 2.0);
-                            g.debris.push(crate::game::debris::Debris { id, key, pos, vel: Vec3::ZERO, rot: glam::Quat::IDENTITY, spin: Vec3::ZERO, scale: 1.0, tint: [1.0; 4], mass: if k == 2 { 3.0 } else { 0.6 }, asleep: true });
+                            g.debris.push(crate::game::debris::Debris { id, key, pos, vel: Vec3::ZERO, rot: glam::Quat::IDENTITY, spin: Vec3::ZERO, scale: 1.0, tint: [1.0; 4], mass: if k == 2 { 3.0 } else { 0.6 }, asleep: true, life: f32::INFINITY });
                         }
                     }
                     let near: Vec<Vec3> = g.debris.iter().filter(|d| (d.pos - p).length() < 12.0).map(|d| d.pos).collect();

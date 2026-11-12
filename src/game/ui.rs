@@ -211,6 +211,7 @@ impl Game {
             ("INVERT Y".into(), if s.bindings.invert_y { "ON" } else { "OFF" }.into()),
             ("FIELD OF VIEW".into(), format!("{:.0}", s.fov)),
             ("SCREEN SHAKE".into(), format!("{:.0}%", s.shake * 100.0)),
+            ("DAMAGE NUMBERS".into(), if s.damage_numbers { "ON" } else { "OFF" }.into()),
         ]
     }
 
@@ -240,7 +241,8 @@ impl Game {
             10 => s.bindings.pad_sens = (s.bindings.pad_sens + 0.1 * dir as f32).clamp(0.1, 4.0),
             11 => s.bindings.invert_y = !s.bindings.invert_y,
             12 => s.fov = (s.fov + 5.0 * dir as f32).clamp(55.0, 100.0),
-            _ => s.shake = (s.shake + 0.25 * dir as f32).clamp(0.0, 1.5),
+            13 => s.shake = (s.shake + 0.25 * dir as f32).clamp(0.0, 1.5),
+            _ => s.damage_numbers = !s.damage_numbers,
         }
         self.settings_dirty = true;
         self.audio.play(Sfx::UiMove, 0.4, 1.2);
