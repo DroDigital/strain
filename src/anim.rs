@@ -958,8 +958,47 @@ pub struct SkinRig {
     pub last_globals: Vec<Mat4>,
 }
 
+/// The retargeted clip-library names standing in for a kit clip on a realistic skeleton.
+fn realistic_clip(kind: SkinKind, kit: &str) -> &'static [&'static str] {
+    match (kind, kit) {
+        (_, "Cast") => &["Spell_Simple_Shoot"],
+        (SkinKind::Zombie, "Idle") => &["Z_Idle"],
+        (SkinKind::Zombie, "Walk") => &["Z_Walk"],
+        (SkinKind::Zombie, "Run") => &["Z_Run"],
+        (SkinKind::Zombie, "Punch") => &["Z_Attack"],
+        (SkinKind::Zombie, "Idle_Attack") => &["Z_Scream"],
+        (SkinKind::Zombie, "Run_Attack") => &["Z_Lunge"],
+        (SkinKind::Zombie, "Crawl") => &["Z_Crawl"],
+        (SkinKind::Zombie, "HitReact") => &["Z_HitReact"],
+        (_, "Idle") => &["Idle_Loop"],
+        (_, "Walk") => &["Walk_Loop"],
+        (_, "Run") => &["Jog_Fwd_Loop"],
+        (_, "Slash") | (_, "Stab") => &["Sword_Attack"],
+        (_, "Punch") => &["Punch_Cross"],
+        (_, "Duck") => &["Crouch_Idle_Loop"],
+        (_, "Crawl") => &["Crouch_Fwd_Loop"],
+        (_, "HitReact") | (_, "HitReact_Left") => &["Hit_Chest"],
+        (_, "Death") => &["Death01"],
+        (_, "Idle_Gun") => &["Pistol_Idle_Loop"],
+        (_, "Walk_Gun") => &["Walk_Loop"],
+        (_, "Run_Gun") => &["Jog_Fwd_Loop"],
+        _ => &[],
+    }
+}
+
 /// Name lookups resolved once per model.
-fn find_clip(lib: &Library, model: usize, names: &[&str]) -> Option<ClipRef> {
+fn find_clip(lib: &Library, model: usize, names: &[&str], kind: SkinKind) -> Option<ClipRef> {
+    // realistic bodies animate from the clip library retargeted onto their own skeleton
+    if let Some(&d) = lib.clip_donor.get(&model) {
+        for n in names {
+            for r in realistic_clip(kind, n) {
+                if let Some(c) = lib.models[d].clip(r) {
+                    return Some((d, c));
+                }
+            }
+        }
+        return None;
+    }
     let donors = ["Zombie_Basic", "Characters_Matt_SingleWeapon"];
     for n in names {
         if let Some(c) = lib.models[model].clip(n) {
@@ -1033,10 +1072,12 @@ impl Rig {
         let time = self.time;
         let speed = Vec3::new(vel.x, 0.0, vel.z).length();
         let height = (model.max.y - model.min.y).max(0.5);
-        let s = self.plan.scale * sk.scale * 1.75 / height;
+        // kit models are normalised to 1.75 m; realistic bodies keep their own stature
+        let s = self.plan.scale * sk.scale * if skel.realistic() { 1.0 } else { 1.75 / height };
 
         // ---- choose the clip
-        let clip = |names: &[&str]| find_clip(lib, sk.model, names);
+        let kind = sk.kind;
+        let clip = |names: &[&str]| find_clip(lib, sk.model, names, kind);
         let dur = |c: Option<ClipRef>| c.map(|(m, i)| lib.models[m].clips[i].duration).unwrap_or(1.0);
         let mut hold = false;
         if pose.dead <= 0.0 && sk.ragdoll.is_some() {
@@ -1072,7 +1113,7 @@ impl Rig {
             let c = clip(if sk.kind == SkinKind::Dog { &["HitReact_Left"] } else { &["HitReact"] });
             (c, (1.0 - pose.stagger) * dur(c) * 0.9)
         } else if pose.cast > 0.0 {
-            let c = clip(&["Punch"]);
+            let c = clip(&["Cast", "Punch"]);
             (c, (0.15 + pose.cast * 0.25) * dur(c))
         } else if pose.block > 0.0 {
             // fists or weapon raised: the opening frame of a punch is a guard
@@ -1202,8 +1243,9 @@ impl Rig {
         let hips = bp("Hips", pos + up * 0.9 * s);
         self.head = head + up * 0.1 * s;
         self.chest = torso;
-        let hr = bone(MIDDLE_R);
-        let hl = bone(MIDDLE_L);
+        // realistic rigs hold the main weapon in the anatomical right hand (their attack clips swing it)
+        let real = skel.realistic();
+        let (hr, hl) = if real { (bone("hand_r"), bone("hand_l")) } else { (bone(MIDDLE_R), bone(MIDDLE_L)) };
         self.hand_r = hr.map(|m| m.transform_point3(Vec3::ZERO)).unwrap_or(torso + rot * Vec3::new(-0.3, -0.2, 0.3));
         self.hand_l = hl.map(|m| m.transform_point3(Vec3::ZERO)).unwrap_or(torso + rot * Vec3::new(0.3, -0.2, 0.3));
         self.weapon_tip = self.hand_r + fwd * 0.3;
@@ -1220,8 +1262,15 @@ impl Rig {
         }
         // ---- held weapons: model meshes where the kit has one, procedural otherwise
         let mut chain_i = 0usize;
-        let weapon_off = Mat4::from_rotation_translation(Quat::from_xyzw(0.43331832, 0.55688697, 0.43980914, 0.5555899), Vec3::new(0.0115709, 0.1046141, -0.0457764));
-        let gun_off = Mat4::from_rotation_translation(Quat::from_xyzw(0.43331832, 0.55688697, 0.43980914, 0.5555899), Vec3::new(0.0357486, 0.0454898, -0.0450469));
+        let (weapon_off, weapon_off_l, gun_off) = if real {
+            // the kit grip, mirrored onto the right hand and seated in the palm (see tools/blender)
+            let r = Mat4::from_rotation_translation(Quat::from_xyzw(0.0, 0.0, -std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2), Vec3::new(-0.0226, 0.0635, 0.0083));
+            let l = Mat4::from_rotation_translation(Quat::from_xyzw(0.0, 0.0, std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2), Vec3::new(0.0226, 0.0635, 0.0083));
+            (r, l, r)
+        } else {
+            let w = Mat4::from_rotation_translation(Quat::from_xyzw(0.43331832, 0.55688697, 0.43980914, 0.5555899), Vec3::new(0.0115709, 0.1046141, -0.0457764));
+            (w, Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)) * w, Mat4::from_rotation_translation(Quat::from_xyzw(0.43331832, 0.55688697, 0.43980914, 0.5555899), Vec3::new(0.0357486, 0.0454898, -0.0450469)))
+        };
         if sk.gun {
             if let (Some(m), Some(&id)) = (hr, lib.static_id.get("Rifle")) {
                 let wm = m * gun_off;
@@ -1246,7 +1295,7 @@ impl Rig {
                 Some((id, sc)) => {
                     let mut wm = hm * weapon_off * Mat4::from_scale(Vec3::splat(sc));
                     if slot == 1 {
-                        wm = hm * Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)) * weapon_off * Mat4::from_scale(Vec3::splat(sc));
+                        wm = hm * weapon_off_l * Mat4::from_scale(Vec3::splat(sc));
                     }
                     e.out.push(id, Instance::new(wm, [w.tint[0], w.tint[1], w.tint[2], w.glow], -1.0));
                     if slot == 0 || self.plan.hands[0].is_none() {
@@ -1256,7 +1305,7 @@ impl Rig {
                 None => {
                     // procedural weapons (shields, bone blades, whips, catalysts) along the forearm
                     let hand = hm.transform_point3(Vec3::ZERO);
-                    let elbow = bp(if slot == 0 { "LowerArm.L" } else { "LowerArm.R" }, self.chest);
+                    let elbow = bp(if slot == 0 { if real { "lowerarm_r" } else { "LowerArm.L" } } else if real { "lowerarm_l" } else { "LowerArm.R" }, self.chest);
                     let fdir = (hand - elbow).normalize_or_zero();
                     let swinging = pose.swing.is_some();
                     let wd = if swinging { (fdir + fwd * 0.6).normalize_or_zero() } else { (fdir * 0.4 + up * 0.6 + fwd * 0.5).normalize_or_zero() };

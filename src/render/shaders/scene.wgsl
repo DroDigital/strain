@@ -5,6 +5,8 @@
 @group(1) @binding(4) var t_key: texture_depth_2d;
 @group(1) @binding(5) var t_atlas: texture_2d<f32>;
 @group(1) @binding(6) var t_mat: texture_2d_array<f32>;
+@group(1) @binding(7) var t_char: texture_2d_array<f32>;
+@group(1) @binding(8) var t_char_mat: texture_2d_array<f32>;
 @group(3) @binding(0) var t_joints: texture_2d<f32>;
 @group(2) @binding(0) var<uniform> KF: mat4x4<f32>;
 
@@ -237,14 +239,21 @@ fn shade(s: Surf, l: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let uv = in.uv;
     let li = i32(min(in.par.x, 250.0) + 0.5);
-    let arr = textureSample(t_array, s_array, uv, li);
-    let mat_s = textureSample(t_mat, s_array, uv, li);
+    let ci = i32(max(in.par.x - 300.0, 0.0) + 0.5);
+    let is_char = in.par.x > 299.5;
+    let arr0 = textureSample(t_array, s_array, uv, li);
+    let mat0 = textureSample(t_mat, s_array, uv, li);
+    let carr = textureSample(t_char, s_array, uv, ci);
+    let cmat = textureSample(t_char_mat, s_array, uv, ci);
+    let arr = select(arr0, carr, is_char);
+    // character materials carry subsurface amount where photo layers carry metalness
+    let mat_s = select(mat0, vec4<f32>(cmat.xyz, 0.0), is_char);
     let atl = textureSample(t_atlas, s_array, in.uv);
     let dp1 = dpdx(in.wpos);
     let dp2 = dpdy(in.wpos);
     let duv1 = dpdx(uv);
     let duv2 = dpdy(uv);
-    let is_atlas = in.par.x > 250.0;
+    let is_atlas = in.par.x > 250.0 && in.par.x < 299.5;
     let tex = select(arr, atl, is_atlas);
     if (tex.a < 0.5) { discard; }
     if (in.par.z > 0.0 && hash21(floor(uv * 48.0) + floor(in.wpos.xz * 3.0)) < in.par.z) { discard; }
@@ -281,7 +290,8 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 
     let li_u = u32(max(in.par.x, 0.0) + 0.5);
     // Skin, Flesh, Vein, GutWall (see textures::Tex) scatter light under the surface
-    let sss = select(0.0, 1.0, li_u == 24u || li_u == 25u || li_u == 26u || li_u == 43u);
+    var sss = select(0.0, 1.0, li_u == 24u || li_u == 25u || li_u == 26u || li_u == 43u);
+    if (is_char) { sss = cmat.w; }
     let metal = mat.w;
     var s: Surf;
     s.n = n;

@@ -265,6 +265,8 @@ pub struct Renderer {
     tex_array: wgpu::Texture,
     mat_array: wgpu::Texture,
     mat_view: wgpu::TextureView,
+    char_albedo_view: wgpu::TextureView,
+    char_mat_view: wgpu::TextureView,
     tex_view: wgpu::TextureView,
     samp_nearest_rep: wgpu::Sampler,
     samp_nearest: wgpu::Sampler,
@@ -420,6 +422,8 @@ impl Renderer {
                 tex_entry(4, bt_tex(D::D2, true)),
                 tex_entry(5, bt_tex(D::D2, false)),
                 tex_entry(6, bt_tex(D::D2Array, false)),
+                tex_entry(7, bt_tex(D::D2Array, false)),
+                tex_entry(8, bt_tex(D::D2Array, false)),
             ],
         });
         let l_post = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -686,6 +690,44 @@ impl Renderer {
             view_formats: &[],
         });
         let mat_view = mat_array.create_view(&wgpu::TextureViewDescriptor { dimension: Some(D::D2Array), ..Default::default() });
+        // per-character textures: skin, eyes, hair (uploaded once, with mips)
+        let char_names = textures::char_names();
+        let char_layers = char_names.len().max(1) as u32;
+        let char_mips = (textures::CHAR_TEX as f32).log2() as u32 + 1;
+        let mk_char = |label: &str, format: wgpu::TextureFormat| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: textures::CHAR_TEX as u32, height: textures::CHAR_TEX as u32, depth_or_array_layers: char_layers },
+                mip_level_count: char_mips,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+        let char_albedo = mk_char("character albedo", wgpu::TextureFormat::Rgba8UnormSrgb);
+        let char_mat = mk_char("character material", wgpu::TextureFormat::Rgba8Unorm);
+        for (layer, name) in char_names.iter().enumerate() {
+            let (a, m) = textures::char_texture(name);
+            for (tex, mut data, cutout) in [(&char_albedo, a, true), (&char_mat, m, false)] {
+                let mut size = textures::CHAR_TEX;
+                for mip in 0..char_mips {
+                    queue.write_texture(
+                        wgpu::TexelCopyTextureInfo { texture: tex, mip_level: mip, origin: wgpu::Origin3d { x: 0, y: 0, z: layer as u32 }, aspect: wgpu::TextureAspect::All },
+                        &data,
+                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size as u32 * 4), rows_per_image: Some(size as u32) },
+                        wgpu::Extent3d { width: size as u32, height: size as u32, depth_or_array_layers: 1 },
+                    );
+                    if size > 1 {
+                        data = textures::downsample(&data, size, cutout);
+                        size /= 2;
+                    }
+                }
+            }
+        }
+        let char_albedo_view = char_albedo.create_view(&wgpu::TextureViewDescriptor { dimension: Some(D::D2Array), ..Default::default() });
+        let char_mat_view = char_mat.create_view(&wgpu::TextureViewDescriptor { dimension: Some(D::D2Array), ..Default::default() });
 
         let shadow_size = Self::shadow_px(&settings);
         let (_, shadow_view) = make_tex(&device, shadow_size, shadow_size, DEPTH, "shadow");
@@ -715,7 +757,7 @@ impl Renderer {
             &atlas.px,
         );
         let atlas_view = atlas_tex.create_view(&Default::default());
-        let g1_scene = Self::scene_bg(&device, &l_scene, &tex_view, &mat_view, &samp_nearest_rep, &shadow_view, &samp_shadow, &key_view, &atlas_view);
+        let g1_scene = Self::scene_bg(&device, &l_scene, &[&tex_view, &mat_view, &char_albedo_view, &char_mat_view], &samp_nearest_rep, &shadow_view, &samp_shadow, &key_view, &atlas_view);
 
         // UI atlas
         let ui_tex = device.create_texture_with_data(
@@ -764,6 +806,8 @@ impl Renderer {
             tex_array,
             mat_array,
             mat_view,
+            char_albedo_view,
+            char_mat_view,
             tex_view,
             samp_nearest_rep,
             samp_nearest,
@@ -823,18 +867,20 @@ impl Renderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn scene_bg(device: &wgpu::Device, l: &wgpu::BindGroupLayout, tex: &wgpu::TextureView, mat: &wgpu::TextureView, s: &wgpu::Sampler, shadow: &wgpu::TextureView, ss: &wgpu::Sampler, key: &wgpu::TextureView, atlas: &wgpu::TextureView) -> wgpu::BindGroup {
+    fn scene_bg(device: &wgpu::Device, l: &wgpu::BindGroupLayout, arrays: &[&wgpu::TextureView; 4], s: &wgpu::Sampler, shadow: &wgpu::TextureView, ss: &wgpu::Sampler, key: &wgpu::TextureView, atlas: &wgpu::TextureView) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: l,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(tex) },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(arrays[0]) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(s) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(shadow) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(ss) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(key) },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(atlas) },
-                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(mat) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(arrays[1]) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(arrays[2]) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(arrays[3]) },
             ],
         })
     }
@@ -910,7 +956,7 @@ impl Renderer {
         if old.shadow_quality != s.shadow_quality {
             self.shadow_size = Self::shadow_px(s);
             self.shadow_view = make_tex(&self.device, self.shadow_size, self.shadow_size, DEPTH, "shadow").1;
-            self.g1_scene = Self::scene_bg(&self.device, &self.l_scene, &self.tex_view, &self.mat_view, &self.samp_nearest_rep, &self.shadow_view, &self.samp_shadow, &self.key_view, &self.atlas_view);
+            self.g1_scene = Self::scene_bg(&self.device, &self.l_scene, &[&self.tex_view, &self.mat_view, &self.char_albedo_view, &self.char_mat_view], &self.samp_nearest_rep, &self.shadow_view, &self.samp_shadow, &self.key_view, &self.atlas_view);
         }
         self.rebuild_targets();
     }

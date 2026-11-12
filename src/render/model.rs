@@ -60,9 +60,46 @@ pub struct Skeleton {
     pub order: Vec<usize>,
 }
 impl Skeleton {
+    /// A joint by name. Gameplay code names bones the kit way (`Torso`, `UpperArm.L`, ...); on the
+    /// realistic (Unreal-style) skeletons those resolve to their counterparts.
     pub fn find(&self, name: &str) -> Option<usize> {
-        self.by_name.get(name).copied()
+        self.by_name.get(name).copied().or_else(|| alias(name).and_then(|a| self.by_name.get(&a).copied()))
     }
+    /// True for the realistic humanoid skeleton (Universal Base Characters / Animation Library).
+    pub fn realistic(&self) -> bool {
+        self.by_name.contains_key("pelvis")
+    }
+}
+
+/// Kit bone name -> Unreal-style humanoid bone name.
+pub fn alias(name: &str) -> Option<String> {
+    let (base, side) = match name.rsplit_once('.') {
+        Some((b, s)) if s == "L" || s == "R" => (b, Some(s.to_lowercase())),
+        _ => (name, None),
+    };
+    let ue = match base {
+        "Root" => "root",
+        "Body" | "Hips" => "pelvis",
+        "Abdomen" => "spine_01",
+        "Torso" | "Torso2" => "spine_03",
+        "Neck" | "Neck1" => "neck_01",
+        "Head" => "Head",
+        "Shoulder" => "clavicle",
+        "UpperArm" => "upperarm",
+        "LowerArm" => "lowerarm",
+        "Middle1" => "middle_01",
+        "Index1" => "index_01",
+        "Pinky1" => "pinky_01",
+        "Thumb1" => "thumb_01",
+        "UpperLeg" => "thigh",
+        "LowerLeg" => "calf",
+        "Foot" => "foot",
+        _ => return None,
+    };
+    Some(match side {
+        Some(s) => format!("{ue}_{s}"),
+        None => ue.to_string(),
+    })
 }
 
 pub struct Model {
@@ -239,6 +276,9 @@ pub fn load(name: &str, bytes: &[u8]) -> Option<Model> {
 
 /// Texture-array layer for a material named `T:<Tex>`.
 fn tex_layer(name: &str) -> Option<f32> {
+    if let Some(c) = name.strip_prefix("C:") {
+        return crate::render::textures::char_layer(c).map(|i| crate::render::textures::CHAR_BASE + i as f32);
+    }
     let t: crate::render::textures::Tex = ron::from_str(name.strip_prefix("T:")?).ok()?;
     Some(t as u32 as f32)
 }
@@ -325,7 +365,7 @@ impl Pose {
                     let q = sample_quat(&ch.times, v, time, ch.step);
                     self.r[j] = if weight >= 0.999 { q } else { self.r[j].slerp(q, weight) };
                 }
-                Track::T(v) if same => {
+                Track::T(v) if same || (src.joints[ch.joint].t - sk.joints[j].t).length() < 1e-3 => {
                     let p = sample_vec(&ch.times, v, time, ch.step);
                     self.t[j] = self.t[j].lerp(p, weight);
                 }
@@ -404,6 +444,8 @@ pub struct Library {
     pub index: HashMap<String, usize>,
     /// breakable props: fragment mesh ids and each fragment's centre in model space
     pub fragments: HashMap<String, Vec<(u32, Vec3)>>,
+    /// realistic models: the clip library retargeted onto their skeleton
+    pub clip_donor: HashMap<usize, usize>,
 }
 
 /// Kit props that shatter, with roughly how many pieces.
@@ -482,7 +524,7 @@ impl Library {
     /// Load every model, appending static meshes to the primitive buffer.
     pub fn build(prims: &mut MeshBuilder, ranges: &mut Vec<super::mesh::MeshRange>) -> Library {
         let models = load_all();
-        let mut lib = Library { models: Vec::new(), static_id: HashMap::new(), skin_id: HashMap::new(), index: HashMap::new(), fragments: HashMap::new() };
+        let mut lib = Library { models: Vec::new(), static_id: HashMap::new(), skin_id: HashMap::new(), index: HashMap::new(), fragments: HashMap::new(), clip_donor: HashMap::new() };
         let mut skin_n = 0u32;
         for m in models {
             if !m.mesh.idx.is_empty() {
@@ -507,6 +549,20 @@ impl Library {
             }
             lib.index.insert(m.name.clone(), lib.models.len());
             lib.models.push(m);
+        }
+        // each realistic body takes its clips from the library whose skeleton matches its own
+        let libs: Vec<usize> = lib.models.iter().enumerate().filter(|(_, m)| m.name.starts_with("Clips_")).map(|(i, _)| i).collect();
+        for (i, m) in lib.models.iter().enumerate() {
+            if !m.skeleton.realistic() || m.name.starts_with("Clips_") {
+                continue;
+            }
+            let diff = |d: usize| -> f32 {
+                let s = &lib.models[d].skeleton;
+                m.skeleton.joints.iter().map(|j| s.by_name.get(&j.name).map(|&k| (s.joints[k].t - j.t).length()).unwrap_or(1.0)).sum()
+            };
+            if let Some(&d) = libs.iter().min_by(|a, b| diff(**a).total_cmp(&diff(**b))) {
+                lib.clip_donor.insert(i, d);
+            }
         }
         lib
     }

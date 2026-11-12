@@ -310,8 +310,9 @@ impl Game {
         // the player's catalyst and strain glow
         let pf = self.pl.strain_frac();
         if pf > 0.2 || self.pl.spells(&self.t).len() > 0 {
-            let c = Vec3::new(0.8, 0.3, 1.2) * (0.3 + pf * 1.4);
-            cands.push((0.0, Light { pos: pp + Vec3::Y * 1.3, radius: 4.0 + pf * 3.0, color: c }));
+            // a faint glow from the catalyst that only grows bright as Strain builds
+            let c = Vec3::new(0.8, 0.3, 1.2) * (0.06 + pf * pf * 1.2);
+            cands.push((0.0, Light { pos: pp + Vec3::Y * 1.1, radius: 2.5 + pf * 3.5, color: c }));
         }
         cands.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         // key light: the closest strong source (fire pits, floodlights, burning wrecks, searchlights)

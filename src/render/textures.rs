@@ -8,6 +8,28 @@ use glam::{Vec2, Vec3};
 use std::f32::consts::TAU;
 
 pub const TEX: usize = 512;
+/// Per-character textures (skin, eyes, hair) live in their own arrays at this size.
+pub const CHAR_TEX: usize = 1024;
+/// Layer values from here on select a per-character texture (`C:<name>` materials).
+pub const CHAR_BASE: f32 = 300.0;
+
+/// Names of the per-character textures (assets/characters/<name>.png), in layer order.
+pub fn char_names() -> Vec<String> {
+    let mut v: Vec<String> = crate::assets::list("characters/").iter().filter_map(|p| p.strip_prefix("characters/")?.strip_suffix(".png").map(|s| s.to_string())).filter(|s| !s.ends_with("_n")).collect();
+    v.sort();
+    v
+}
+pub fn char_layer(name: &str) -> Option<usize> {
+    char_names().iter().position(|n| n == name)
+}
+/// (albedo RGBA8 sRGB, material RGBA8 linear) of one per-character texture.
+pub fn char_texture(name: &str) -> (Vec<u8>, Vec<u8>) {
+    let get = |p: &str, fill: [u8; 4]| match crate::assets::image(p) {
+        Some(im) if im.w == CHAR_TEX && im.h == CHAR_TEX => im.px,
+        _ => fill.iter().copied().cycle().take(CHAR_TEX * CHAR_TEX * 4).collect(),
+    };
+    (get(&format!("characters/{name}.png"), [180, 140, 120, 255]), get(&format!("characters/{name}_n.png"), [128, 128, 160, 0]))
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u32)]
@@ -212,7 +234,7 @@ fn surface(layer: Tex) -> (f32, f32, f32, f32) {
         Tex::Grass => (-1.0, 1.1, 0.0, 0.6),
         Tex::GutWall => (0.22, 1.0, 0.0, 1.3),
         Tex::Lattice => (0.2, 1.0, 0.6, 0.8),
-        Tex::Leather => (-1.0, 0.85, 0.0, 0.6),
+        Tex::Leather => (-1.0, 1.3, 0.0, 0.6),
         Tex::Hair => (0.42, 1.0, 0.0, 1.4),
         Tex::Denim => (-1.0, 1.1, 0.0, 0.7),
         Tex::Count => (0.6, 1.0, 0.0, 0.0),

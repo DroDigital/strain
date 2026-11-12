@@ -49,10 +49,10 @@ fn parent_override(name: &str) -> Option<&'static str> {
     })
 }
 fn is_core(name: &str) -> bool {
-    ["Hips", "Abdomen", "Torso", "Neck", "Shoulder", "UpperLeg", "Body", "Back", "UpperArm"].iter().any(|k| name.starts_with(k)) && !name.starts_with("UpperArm") || name == "Body"
+    ["Hips", "Abdomen", "Torso", "Neck", "Shoulder", "UpperLeg", "Body", "Back", "pelvis", "spine", "neck", "clavicle", "thigh"].iter().any(|k| name.starts_with(k))
 }
 fn is_small(name: &str) -> bool {
-    ["Pinky", "Middle", "Index", "Thumb", "Ear", "Tongue", "Eyelid", "TopMouth", "BottomMouth"].iter().any(|k| name.starts_with(k))
+    ["Pinky", "Middle", "Index", "Thumb", "Ear", "Tongue", "Eyelid", "TopMouth", "BottomMouth", "pinky", "middle", "index", "ring", "thumb", "ball"].iter().any(|k| name.starts_with(k))
 }
 
 /// The physics parent used for a joint: an override, else the nearest simulated ancestor.
