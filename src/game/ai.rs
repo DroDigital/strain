@@ -31,6 +31,14 @@ impl Game {
                 continue;
             }
             self.affix_tick(e, dt);
+            if let crate::world::AreaKind::Rift(ri) = self.area.kind {
+                if crate::world::rift::RULES[ri].dark && self.boss != Some(e) && self.w.ai.get(e).map(|a| a.kind) != Some(AiKind::Ambusher) {
+                    let near = (pos - pp).length() < 7.0 || self.w.actor.get(e).map(|a| a.act.kind == ActKind::Attack).unwrap_or(false);
+                    if let Some(a) = self.w.actor.get_mut(e) {
+                        a.dissolve = if near { (a.dissolve - dt * 3.0).max(0.0) } else { (a.dissolve + dt).min(0.85) };
+                    }
+                }
+            }
             if !self.w.alive(e) || !self.w.actor.get(e).map(|a| a.alive).unwrap_or(false) {
                 continue;
             }

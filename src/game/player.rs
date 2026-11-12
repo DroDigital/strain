@@ -104,17 +104,13 @@ pub struct PlayerState {
     pub hits_landed: u32,
     pub affliction: Option<(Affliction, f32)>,
     pub affl_cd: f32,
-    pub regen_t: f32,
     pub heal_regen: f32,
     pub step_t: f32,
-    pub interact_hint: Option<String>,
     pub last_hit_target: Option<(Entity, f32)>,
-    pub dodge_count: u8,
     pub spore_t: f32,
     pub sprint_fx_t: f32,
-    pub hp_regen_acc: f32,
     pub soldiers_angered: u32,
-    pub plan_dirty: bool,
+    pub kindle_dps: f32,
     pub combo_index: u8,
 }
 
@@ -187,17 +183,13 @@ impl PlayerState {
             hits_landed: 0,
             affliction: None,
             affl_cd: 3.0,
-            regen_t: 0.0,
             heal_regen: 0.0,
             step_t: 0.0,
-            interact_hint: None,
             last_hit_target: None,
-            dodge_count: 0,
             spore_t: 0.0,
             sprint_fx_t: 0.0,
-            hp_regen_acc: 0.0,
             soldiers_angered: 0,
-            plan_dirty: true,
+            kindle_dps: 0.0,
             combo_index: 0,
         }
     }
@@ -334,9 +326,6 @@ impl PlayerState {
     }
     pub fn strain_frac(&self) -> f32 {
         (self.strain / self.stats.strain_cap).clamp(0.0, 1.0)
-    }
-    pub fn has_mut(&self, id: &str) -> bool {
-        self.life.mutations.iter().any(|m| m == id)
     }
 
     /// Weapon used for light/heavy attacks from a hand (None = fist).

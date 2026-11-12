@@ -112,7 +112,7 @@ impl Gen {
             let door_bay = bays / 2;
             for f in 0..floors {
                 let (y0, y1) = (KERB + f as f32 * FLOOR_H, KERB + (f + 1) as f32 * FLOOR_H);
-                let mut emit = |m: &mut MeshBuilder, b0: u32, b1: u32, tex: Tex, col: [u8; 4]| {
+                let emit = |m: &mut MeshBuilder, b0: u32, b1: u32, tex: Tex, col: [u8; 4]| {
                     let a = o + *start + *dir * (b0 as f32 * bw);
                     let b = o + *start + *dir * (b1 as f32 * bw);
                     // counter-clockwise seen from outside
@@ -135,6 +135,13 @@ impl Gen {
                         };
                         let col = if tex == Tex::ShopfrontLit { [255, 255, 255, 200] } else if tex == Tex::Graffiti || tex == Tex::Door || tex == Tex::Shopfront { WHITE } else { wall_col };
                         emit(&mut self.g.mesh, b, b + 1, tex, col);
+                        if tex == Tex::Graffiti {
+                            let c = *start + *dir * ((b as f32 + 0.5) * bw);
+                            let n = Vec3::new(dir.z, 0.0, -dir.x);
+                            let pos = self.p(c.x + n.x * 0.15, 1.7, c.z + n.z * 0.15);
+                            let idx = self.r.u32(0..64) as f32;
+                            self.g.anims.push(AnimProp { kind: AnimKind::Sign, pos, yaw: idx, size: 1.0 });
+                        }
                         if tex == Tex::ShopfrontLit {
                             let c = *start + *dir * ((b as f32 + 0.5) * bw);
                             let n = Vec3::new(dir.z, 0.0, -dir.x);
@@ -206,7 +213,7 @@ impl Gen {
             let (g0, g1) = ((door_bay as f32 - 1.0).max(0.0) * bw, (door_bay as f32 + 1.0) * bw);
             for (si, (s, d, l, _)) in sides.iter().enumerate() {
                 let n = Vec3::new(-d.z, 0.0, d.x);
-                let mut seg = |a: f32, b: f32, cols: &mut Vec<Aabb>| {
+                let seg = |a: f32, b: f32, cols: &mut Vec<Aabb>| {
                     let p0 = o + *s + *d * a;
                     let p1 = o + *s + *d * b + n * wt;
                     cols.push(Aabb::new(p0.min(p1), p0.max(p1) + Vec3::Y * (KERB + FLOOR_H)));
@@ -410,7 +417,7 @@ impl Gen {
             4 => (3, 10),
             _ => (2, 9),
         };
-        let mut fl = |r: &mut Rng| r.u32(floors_rng.0..=floors_rng.1);
+        let fl = |r: &mut Rng| r.u32(floors_rng.0..=floors_rng.1);
         let open_p = 0.3;
         let layout = self.r.u32(0..10);
         let mid = (a + b) * 0.5;

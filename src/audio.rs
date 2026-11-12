@@ -319,7 +319,7 @@ impl Music {
             self.arp_f = root * 4.0 * scale[arp[(s as usize + (s as usize / 8)) % 8]];
         }
         let nz = self.rng.f();
-        let mut adv = |i: usize, f: f32, ph: &mut [f32; 12]| {
+        let adv = |i: usize, f: f32, ph: &mut [f32; 12]| {
             ph[i] = (ph[i] + f * k).fract();
             ph[i]
         };
@@ -360,7 +360,7 @@ impl Music {
         self.lp[5] += (self.lp[4] - self.lp[5]) * 0.6;
         let wind = self.lp[3] * 6.0 * (0.25 + c.wind);
         let rain = (self.lp[4] - self.lp[5] * 0.7) * 0.22 * c.rain;
-        let music = (drone * (0.5 + 0.2 * c.mood) + bass * 0.55 + kick * 0.6 + hat + arp + strain) * self.st.music_volume;
+        let music = (drone * (0.5 + 0.2 * c.mood) + bass * 0.55 + kick * 0.6 + hat + arp + strain) * self.st.music_volume * 0.6;
         let amb = wind * 0.12 + rain;
         let pan = ((self.t * 0.11) as f32 * TAU).sin() * 0.15;
         ((music * (1.0 - pan) + amb), (music * (1.0 + pan) + amb * 0.95 + rain * 0.1))
@@ -506,5 +506,61 @@ impl Audio {
     }
     pub fn set_music(&self, m: MusicState) {
         self.send(Cmd::Music(m));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rms(b: &[f32]) -> f32 {
+        (b.iter().map(|x| x * x).sum::<f32>() / b.len().max(1) as f32).sqrt()
+    }
+
+    #[test]
+    fn every_sound_is_finite_and_audible() {
+        for i in 0..Sfx::Count as usize {
+            let s: Sfx = unsafe { std::mem::transmute::<usize, Sfx>(i) };
+            let b = synth(s);
+            assert!(b.iter().all(|x| x.is_finite()), "{s:?} has NaN");
+            let peak = b.iter().fold(0.0f32, |a, x| a.max(x.abs()));
+            assert!(peak > 0.02, "{s:?} is silent (peak {peak})");
+            assert!(peak < 4.0, "{s:?} is far too loud (peak {peak})");
+            eprintln!("{s:?}: {} samples, peak {peak:.2}, rms {:.3}", b.len(), rms(&b));
+        }
+    }
+
+    #[test]
+    fn music_layers_stay_bounded() {
+        for (combat, strain, boss) in [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 1.0)] {
+            let mut m = Music::new();
+            m.st = MusicState { combat, strain, boss, mood: 2.0, rain: 1.0, wind: 1.0, volume: 1.0, music_volume: 1.0, muffle: 0.0 };
+            m.cur = m.st;
+            let mut buf = Vec::new();
+            for _ in 0..44100 * 2 {
+                let (l, r) = m.next(44100.0);
+                assert!(l.is_finite() && r.is_finite());
+                buf.push(l);
+            }
+            let peak = buf.iter().fold(0.0f32, |a, x| a.max(x.abs()));
+            eprintln!("music combat {combat} strain {strain} boss {boss}: peak {peak:.2} rms {:.3}", rms(&buf));
+            assert!(rms(&buf) > 0.005 && peak < 3.0);
+        }
+    }
+
+    #[test]
+    fn mixer_fills_stereo_buffers() {
+        let q = Arc::new(Mutex::new(Vec::new()));
+        let mut mx = Mixer { queue: q.clone(), bank: Vec::new(), voices: Vec::new(), music: Music::new(), sr: 48000.0, lp: [0.0; 2] };
+        q.lock().unwrap().push(Cmd::Bank((0..Sfx::Count as usize).map(|i| Arc::new(synth(unsafe { std::mem::transmute::<usize, Sfx>(i) }))).collect()));
+        q.lock().unwrap().push(Cmd::Music(MusicState { volume: 1.0, music_volume: 1.0, ..Default::default() }));
+        for i in 0..Sfx::Count as usize {
+            q.lock().unwrap().push(Cmd::Play { id: i, l: 0.5, r: 0.5, rate: 1.0 });
+        }
+        let mut out = vec![0.0f32; 4096];
+        for _ in 0..50 {
+            mx.fill(&mut out, 2);
+            assert!(out.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
+        }
     }
 }

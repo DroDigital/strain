@@ -391,7 +391,7 @@ impl Game {
         self.prof.last_pit = pit;
         self.prof.epoch += 1;
         self.pl.heal_charges = self.pl.stats.heal_charges;
-        self.pl.strain = 0.0;
+        // Strain is untouched: it only falls by landing melee hits
         self.pl.affliction = None;
         self.pl.stamina = self.pl.stats.max_stam;
         self.pl.soldiers_angered = 0;

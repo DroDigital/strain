@@ -67,13 +67,6 @@ pub fn ease_in(t: f32) -> f32 {
     let t = saturate(t);
     t * t * t
 }
-pub fn approach(cur: f32, target: f32, step: f32) -> f32 {
-    if cur < target {
-        (cur + step).min(target)
-    } else {
-        (cur - step).max(target)
-    }
-}
 pub fn wrap_angle(mut a: f32) -> f32 {
     use std::f32::consts::PI;
     while a > PI {

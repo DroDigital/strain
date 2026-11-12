@@ -289,7 +289,8 @@ impl Game {
                 }
                 self.audio.play_at(Sfx::Fire, c, 0.9, 1.0);
             }
-            SpellKind::Kindle(_, dur) => {
+            SpellKind::Kindle(dps, dur) => {
+                self.pl.kindle_dps = dps * m;
                 let a = self.w.actor.get_mut(caster).unwrap();
                 a.kindle = dur;
                 self.parts.burst(Fx::Fire, hand, Vec3::Y, 30, 1.0);

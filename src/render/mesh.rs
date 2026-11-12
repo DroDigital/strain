@@ -58,10 +58,6 @@ impl MeshBuilder {
     pub fn new() -> Self {
         Self::default()
     }
-    pub fn clear(&mut self) {
-        self.verts.clear();
-        self.idx.clear();
-    }
     /// Quad from four corners (counter-clockwise seen from the front), with explicit UVs.
     pub fn quad_uv(&mut self, p: [Vec3; 4], uv: [Vec2; 4], layer: u32, color: [u8; 4]) {
         let n = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
@@ -166,13 +162,6 @@ impl MeshBuilder {
             }
         }
     }
-    pub fn append(&mut self, other: &MeshBuilder, m: Mat4) {
-        let b = self.verts.len() as u32;
-        let start = self.verts.len();
-        self.verts.extend_from_slice(&other.verts);
-        self.idx.extend(other.idx.iter().map(|i| i + b));
-        self.xform_from(start, m);
-    }
 }
 
 pub fn trs(t: Vec3, r: Quat, s: Vec3) -> Mat4 {
@@ -218,7 +207,6 @@ pub enum Prim {
     Card,
     /// wedge (triangular prism)
     Wedge,
-    Count,
 }
 
 #[derive(Clone, Copy, Debug)]

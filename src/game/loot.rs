@@ -344,6 +344,7 @@ pub fn describe(t: &Tables, it: &Item) -> Vec<(String, [f32; 3])> {
     for s in &it.spells {
         if let Some(d) = t.spells.iter().find(|x| &x.id == s) {
             out.push((format!("SPELL: {} ({:?}, {:.0} STRAIN)", d.name.to_uppercase(), d.school, d.strain).to_uppercase(), [0.9, 0.6, 1.0]));
+            out.push((format!("  {}", d.desc.to_uppercase()), [0.6, 0.5, 0.7]));
         }
     }
     if let Some(u) = &it.unique {

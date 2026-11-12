@@ -324,7 +324,7 @@ impl Game {
         let pa = self.w.actor.get_mut(pe).unwrap();
         pa.hp = (pa.hp + dealt * st.lifesteal).min(pa.max_hp);
         // on-hit effects
-        let burn = st.sum(|e| if let Effect::HitBurn(x) = e { Some(*x) } else { None }) + if self.w.actor.get(pe).unwrap().kindle > 0.0 { 12.0 } else { 0.0 };
+        let burn = st.sum(|e| if let Effect::HitBurn(x) = e { Some(*x) } else { None }) + if self.w.actor.get(pe).unwrap().kindle > 0.0 { self.pl.kindle_dps } else { 0.0 };
         let rot = st.sum(|e| if let Effect::HitRot(x) = e { Some(*x) } else { None });
         let slow = st.sum(|e| if let Effect::HitSlow(x) = e { Some(*x) } else { None });
         if let Some(ta) = self.w.actor.get_mut(t) {
@@ -826,7 +826,7 @@ impl Game {
         b.solid = false;
         self.w.body.insert(e, b);
         let ttl = if kind == ProjKind::Bullet { 0.6 } else { 3.5 };
-        self.w.proj.insert(e, Proj { kind, vel, dmg, poise, team, owner, ttl, radius: if kind == ProjKind::BossOrb { 0.5 } else { 0.3 }, blast, homing: None, reflected: false, spell: matches!(kind, ProjKind::Ember | ProjKind::Shard | ProjKind::Fireball) });
+        self.w.proj.insert(e, Proj { kind, vel, dmg, poise, team, owner, ttl, radius: if kind == ProjKind::BossOrb { 0.5 } else { 0.3 }, blast, homing: None, reflected: false, spell: matches!(kind, ProjKind::Ember | ProjKind::Shard) });
         e
     }
 
@@ -837,7 +837,7 @@ impl Game {
             let mut pr = self.w.proj.get(e).unwrap().clone();
             let p0 = self.w.body.get(e).unwrap().pos;
             pr.ttl -= dt;
-            if matches!(pr.kind, ProjKind::Acid | ProjKind::Fireball) {
+            if pr.kind == ProjKind::Acid {
                 pr.vel.y -= 9.0 * dt;
             }
             if let Some(h) = pr.homing {
@@ -904,7 +904,7 @@ impl Game {
                 }
                 let dir = flat(pr.vel).normalize_or_zero();
                 let kind = match pr.kind {
-                    ProjKind::Ember | ProjKind::Fireball => DmgKind::Fire,
+                    ProjKind::Ember => DmgKind::Fire,
                     ProjKind::Shard => DmgKind::Spell,
                     _ => DmgKind::Proj,
                 };
@@ -934,15 +934,15 @@ impl Game {
             // trails
             match pr.kind {
                 ProjKind::Acid => self.parts.burst(Fx::Acid, np, Vec3::ZERO, 1, 0.2),
-                ProjKind::Ember | ProjKind::Fireball => self.parts.burst(Fx::Fire, np, Vec3::ZERO, 2, 0.6),
+                ProjKind::Ember => self.parts.burst(Fx::Fire, np, Vec3::ZERO, 2, 0.6),
                 ProjKind::Shard | ProjKind::BossOrb => self.parts.burst(Fx::Rift, np, Vec3::ZERO, 1, 0.3),
                 ProjKind::BoneShard => self.parts.burst(Fx::Bone, np, Vec3::ZERO, 1, 0.2),
                 ProjKind::Bullet => {}
             }
             if dead {
-                if pr.blast > 0.0 && pr.ttl > 0.0 || matches!(pr.kind, ProjKind::Fireball | ProjKind::Acid | ProjKind::BossOrb) {
+                if pr.blast > 0.0 && pr.ttl > 0.0 || matches!(pr.kind, ProjKind::Acid | ProjKind::BossOrb) {
                     let r = pr.blast.max(1.2);
-                    let kind = if matches!(pr.kind, ProjKind::Ember | ProjKind::Fireball) { DmgKind::Fire } else { DmgKind::Spell };
+                    let kind = if pr.kind == ProjKind::Ember { DmgKind::Fire } else { DmgKind::Spell };
                     if pr.blast > 0.0 {
                         self.aoe(np, r, pr.dmg * 0.6, pr.poise, pr.team, pr.owner, kind);
                     }
@@ -951,7 +951,7 @@ impl Game {
                             self.parts.burst(Fx::Acid, np, Vec3::Y, 16, 1.0);
                             self.spawn_zone(np, ZoneKind::Acid, 1.6, pr.dmg * 0.35, 3.0, pr.team, pr.owner);
                         }
-                        ProjKind::Ember | ProjKind::Fireball => {
+                        ProjKind::Ember => {
                             self.parts.burst(Fx::Fire, np, Vec3::Y, 24, 1.4);
                             self.parts.burst(Fx::Flash, np, Vec3::ZERO, 1, 1.0);
                             self.audio.play_at(Sfx::Explode, np, 0.6, 1.5);
@@ -1072,7 +1072,7 @@ impl Game {
                             }
                         }
                     }
-                    self.parts.burst(Fx::Rift, p + rand_dir(&mut self.rng) * z.radius + Vec3::Y * 0.5, (Vec3::ZERO - Vec3::ZERO), 2, 0.3);
+                    self.parts.burst(Fx::Rift, p + rand_dir(&mut self.rng) * z.radius + Vec3::Y * 0.5, Vec3::ZERO, 2, 0.3);
                     self.distorts_temp.push((p + Vec3::Y, z.radius * 0.5, 0.6, 1.0));
                 }
                 ZoneKind::Tear => {

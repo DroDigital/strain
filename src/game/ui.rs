@@ -7,6 +7,7 @@ use crate::data::Slot;
 use crate::input::{Action, REBINDABLE};
 use crate::render::textures::{glyph_cell, GLYPH_H, GLYPH_W, UI_ATLAS_H, UI_ATLAS_W, UI_WHITE};
 use crate::render::{UiVertex, WindowMode};
+use crate::physics::Statics;
 use crate::world::{pit_pos, rift_site, AreaKind, DState, CITY_H, CITY_W, CS, DISTRICTS};
 use glam::{Vec2, Vec3, Vec4};
 
@@ -410,7 +411,7 @@ impl Game {
         let cx = uw * 0.5;
         p.rect(cx - cw * 0.5, 8.0, cw, 12.0, [0.0; 3], 0.4);
         let yaw = self.cam.yaw;
-        let mut mark = |p: &mut Painter, ang: f32, label: &str, c: [f32; 3]| {
+        let mark = |p: &mut Painter, ang: f32, label: &str, c: [f32; 3]| {
             let d = crate::util::wrap_angle(ang - yaw);
             if d.abs() < 1.4 {
                 let px = cx - d / 1.4 * cw * 0.5;
@@ -457,6 +458,22 @@ impl Game {
         for (wp, txt, c, life) in &self.floats {
             if let Some(s) = self.project(*wp + Vec3::Y * (1.0 - life) * 0.8, uw, uh) {
                 p.text_c(s.x, s.y, txt, 1.0, *c, life.min(1.0) * 1.5);
+            }
+        }
+        // graffiti read from close by
+        let lines = &self.t.text.graffiti;
+        for c in self.area.chunks.values() {
+            for a in &c.anims {
+                if a.kind == crate::world::AnimKind::Sign {
+                    let d = (a.pos - self.cam.eye).length();
+                    if d < 11.0 && self.area.line_of_sight(self.cam.eye, a.pos) {
+                        if let Some(s) = self.project(a.pos, uw, uh) {
+                            let txt = &lines[a.yaw as usize % lines.len()];
+                            let k = (1.0 - d / 11.0).min(0.6) * 1.6;
+                            p.text_c(s.x, s.y, txt, (2.0 - d * 0.1).max(1.0), [0.85, 0.15, 0.25], k);
+                        }
+                    }
+                }
             }
         }
         // speech bubbles
@@ -759,6 +776,11 @@ impl Game {
             let cy = my + (dd.grid.1 * 6) as f32 * cs + 0.4 * cs;
             p.text_c(cx, cy, dd.name, 1.0, if self.prof.district_unlocked(d) { WHITE } else { [0.5; 3] }, 1.0);
             p.text_c(cx, cy + 10.0, &format!("LV {}-{}", dd.levels.0, dd.levels.1), 1.0, DIM, 1.0);
+            if self.prof.districts_seen[d] {
+                let lm = crate::world::chunk_center(d, dd.landmark_at);
+                let s = Vec2::new(mx + lm.x / CS * cs, my + lm.z / CS * cs);
+                p.text_c(s.x, s.y + 6.0, dd.landmark, 1.0, [0.75, 0.75, 0.6], 0.8);
+            }
         }
         let to_map = |q: Vec3| Vec2::new(mx + q.x / CS * cs, my + q.z / CS * cs);
         for (i, lit) in self.prof.pits.iter().enumerate() {

@@ -73,7 +73,9 @@ impl Game {
         p.arms.clear();
         if !a.arms.is_empty() {
             for side in [1.0f32, -1.0] {
-                let kind = if side > 0.0 || stage >= 2 { *pick(r, &a.arms) } else { a.arms[0] };
+                let ok: Vec<ArmKind> = a.arms.iter().copied().filter(|k| pt.arms.iter().any(|x| x.kind == *k && in_stage(x.stage))).collect();
+                let pool = if ok.is_empty() { a.arms.clone() } else { ok };
+                let kind = if side > 0.0 || stage >= 2 { *pick(r, &pool) } else { pool[0] };
                 let part = pt.arms.iter().find(|x| x.kind == kind).unwrap_or(&pt.arms[0]);
                 p.arms.push(ArmDef { side, kind, tex: part.tex, len: part.len * rf(r, 0.9, 1.2), thick: part.thick, at: 1.0 });
             }
@@ -345,7 +347,7 @@ impl Game {
         let ap = self.t.apex.get(idx)?.clone();
         let arch = self.t.archetype(&ap.archetype);
         let mut r = seed_rng(idx as u32, self.area.epoch, 4);
-        let level = self.level_at(pos, &mut r) + 2;
+        let level = DISTRICTS.get(ap.district as usize).map(|d| d.levels.1).unwrap_or_else(|| self.level_at(pos, &mut r)) + 2;
         let e = self.spawn_infected(arch, pos, 4, level, origin, &mut r, Some(ap.affixes.clone()));
         if let Some(rig) = self.w.rig.get_mut(e) {
             rig.plan.scale = ap.scale;
@@ -605,7 +607,7 @@ impl Game {
         let mut r = Rng::with_seed(self.rng.u64(..));
         let luck = self.pl.stats.luck;
         let srcs: Vec<Source> = if team == Team::Military {
-            vec![Source::Military]
+            vec![f.source]
         } else {
             match self.area.kind {
                 AreaKind::Rift(_) => vec![Source::Rift, Source::Biological],

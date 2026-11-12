@@ -528,6 +528,7 @@ pub struct Archetype {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct ApexDef {
     pub id: String,
     pub name: String,
@@ -573,6 +574,7 @@ pub struct BossPhase {
     pub line: String,
 }
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct BossDef {
     pub id: String,
     pub name: String,
@@ -632,6 +634,7 @@ struct EnemyFile {
     bosses: Vec<BossDef>,
 }
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct TextFile {
     pub notes: Vec<String>,
     pub graffiti: Vec<String>,

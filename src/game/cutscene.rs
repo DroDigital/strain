@@ -3,7 +3,7 @@
 use super::{Game, Screen};
 use crate::audio::Sfx;
 use crate::util::{ease_out, smooth};
-use crate::world::{pit_pos, rift_site, CS};
+use crate::world::{pit_pos, rift_site};
 use glam::Vec3;
 
 #[derive(Clone, Copy, PartialEq, Debug)]

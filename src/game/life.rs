@@ -6,7 +6,7 @@ use crate::audio::{MusicState, Sfx};
 use crate::particles::{Fx, P};
 use crate::render::{Env, Light};
 use crate::util::{chance, rand_dir, rf, smooth};
-use crate::world::{district_at, AreaKind, DState, EmitKind, CITY_H, CITY_W, CS, DISTRICTS};
+use crate::world::{district_at, AreaKind, DState, EmitKind, DISTRICTS};
 use glam::Vec3;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -273,7 +273,7 @@ impl Game {
             let e = self.w.ent(id);
             if let Some(b) = self.w.body.get(e) {
                 let col = match pr.kind {
-                    crate::game::comp::ProjKind::Ember | crate::game::comp::ProjKind::Fireball => Vec3::new(3.0, 1.2, 0.3),
+                    crate::game::comp::ProjKind::Ember => Vec3::new(3.0, 1.2, 0.3),
                     crate::game::comp::ProjKind::Acid => Vec3::new(0.6, 1.5, 0.2),
                     crate::game::comp::ProjKind::Bullet => continue,
                     _ => Vec3::new(1.2, 0.7, 2.5),
@@ -340,8 +340,4 @@ impl Game {
             muffle: if self.slowmo > 0.0 { 0.6 } else { 0.0 } + if self.screen.pauses() { 0.5 } else { 0.0 },
         }
     }
-}
-
-pub fn city_extent() -> (f32, f32) {
-    (CITY_W as f32 * CS, CITY_H as f32 * CS)
 }

@@ -3,7 +3,7 @@
 //! enemy mix; the rules themselves are applied by the game loop from `RiftRules`.
 use super::*;
 use crate::physics::Aabb;
-use crate::render::mesh::{rgb, rgbe, trs, WHITE};
+use crate::render::mesh::{rgb, rgbe, trs};
 use crate::render::textures::Tex;
 use crate::util::{chance, rf, seed_rng, Rng};
 use glam::{Quat, Vec3};
@@ -231,7 +231,7 @@ fn gen_room(rules: &RiftRules, idx: usize, room: (i32, i32), open: [bool; 4], ki
     // walls with doorways: south(-z), east(+x), north(+z), west(-x)
     let th = 1.5;
     let mid = RS * 0.5;
-    let mut wall = |g: &mut ChunkGen, a: Vec3, b: Vec3| {
+    let wall = |g: &mut ChunkGen, a: Vec3, b: Vec3| {
         g.mesh.boxx(a, b, t(rules.wall), t(rules.accent), wall_c, 3.5, 63 & !8);
         g.cols.push(Aabb::new(a, b));
     };

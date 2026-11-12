@@ -1,6 +1,6 @@
 //! Components stored in the ECS world.
 use crate::anim::Rig;
-use crate::data::{AffixKind, AiKind, MoveDef, School, Source};
+use crate::data::{AffixKind, AiKind, MoveDef, Source};
 use crate::ecs::{define_world, Entity};
 use crate::game::loot::Item;
 use glam::Vec3;
@@ -194,13 +194,9 @@ pub enum AiState {
     Wander,
     Alert,
     Chase,
-    Strafe,
-    Retreat,
     Hide,
     Flee,
     Cower,
-    Follow,
-    Turning,
 }
 
 #[derive(Clone, Debug)]
@@ -284,7 +280,6 @@ pub enum ProjKind {
     Shard,
     BoneShard,
     BossOrb,
-    Fireball,
 }
 #[derive(Clone, Debug)]
 pub struct Proj {
@@ -361,13 +356,6 @@ pub struct Pickup {
 #[derive(Clone, Debug)]
 pub struct Interact {
     pub kind: crate::world::InteractKind,
-}
-
-/// Cast spell data carried by the player's catalysts.
-#[derive(Clone, Debug)]
-pub struct SpellSlot {
-    pub spell: usize,
-    pub school: School,
 }
 
 define_world! {

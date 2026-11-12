@@ -34,12 +34,6 @@ impl Aabb {
     }
 }
 
-/// Static collider set for one world chunk, bucketed on a coarse grid.
-#[derive(Default, Clone)]
-pub struct ColSet {
-    pub boxes: Vec<Aabb>,
-}
-
 /// Anything that can answer static collision queries.
 pub trait Statics {
     fn each_box(&self, min: Vec2, max: Vec2, f: &mut dyn FnMut(&Aabb));

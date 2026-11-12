@@ -142,7 +142,6 @@ pub struct Input {
     gilrs: Option<gilrs::Gilrs>,
     /// When set, the next key/button press is captured as a new binding for (action, is_pad).
     pub rebinding: Option<(Action, bool)>,
-    pub text: String,
 }
 
 impl Input {
@@ -163,7 +162,6 @@ impl Input {
             using_pad: false,
             gilrs: gilrs::Gilrs::new().ok(),
             rebinding: None,
-            text: String::new(),
         }
     }
     /// Inject an action state (used by the scripted test driver).
@@ -345,10 +343,6 @@ impl Input {
         self.rclick = false;
         self.scroll = 0.0;
         self.mouse_moved = false;
-    }
-    pub fn clear_edges(&mut self) {
-        self.pressed = [false; N];
-        self.released = [false; N];
     }
     pub fn bind_label(&self, a: Action) -> String {
         self.bindings.map.iter().find(|m| m.0 == a).map(|m| if self.using_pad { m.2.label() } else { m.1.label() }).unwrap_or_default()

@@ -22,7 +22,6 @@ use crate::ecs::Entity;
 use crate::input::{Action, Input};
 use crate::particles::Particles;
 use crate::physics::{SpatialHash, Statics};
-use crate::render::mesh::Instance;
 use crate::render::{Distort, InstList, Light, ParticleInst, Renderer, UiVertex};
 use crate::util::{flat, Rng};
 use crate::world::{pit_pos, Area};
@@ -611,6 +610,10 @@ impl Game {
         if self.screen == Screen::Dead {
             self.dead_t += dt;
         }
+        // a level earned while a menu was open is offered as soon as play resumes
+        if self.screen == Screen::None && self.cutscene.is_none() && self.pl.life.pending_levels > 0 && self.mutation_choices.is_empty() && self.w.actor.get(self.player).map(|a| a.alive).unwrap_or(false) {
+            self.open_level_up();
+        }
         let skip = pressed(self, Action::UiAccept) || pressed(self, Action::UiBack) || pressed(self, Action::Pause);
         let in_cut = self.cutscene_tick(dt, skip);
         if in_cut {
@@ -826,9 +829,6 @@ impl Game {
         }
     }
 
-    pub fn unused(&self) -> Option<Instance> {
-        None
-    }
 }
 
 fn input_started(input: &Input, rb: (Action, bool)) -> bool {

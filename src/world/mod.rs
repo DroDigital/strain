@@ -24,6 +24,7 @@ pub enum DState {
     Lost,
 }
 
+#[allow(dead_code)]
 pub struct District {
     pub name: &'static str,
     pub state: DState,

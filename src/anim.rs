@@ -5,7 +5,7 @@ use crate::data::{ArmKind, Attach, Growth, GrowthKind, HeadKind, LegKind, Swing,
 use crate::render::mesh::{segment, trs, Instance, Prim};
 use crate::render::textures::Tex;
 use crate::render::InstList;
-use crate::util::{ease_in, ease_out, lerp, smooth, Spring};
+use crate::util::{ease_in, ease_out, smooth, Spring};
 use glam::{Mat4, Quat, Vec3};
 use std::f32::consts::{PI, TAU};
 
@@ -272,8 +272,6 @@ impl Rig {
         let time = self.time;
         let speed = Vec3::new(vel.x, 0.0, vel.z).length();
         let rot = Quat::from_rotation_y(yaw);
-        let fwd = rot * Vec3::Z;
-        let right = rot * Vec3::NEG_X;
         let p = &self.plan;
         let spider = p.leg_kind == LegKind::Spider;
         let quad = spider && p.torso.z > p.torso.y;
@@ -426,7 +424,6 @@ impl Rig {
         let mut chain_i = 0usize;
         let arms = self.plan.arms.clone();
         let mut hand_pos = [self.chest; 2];
-        let mut right_hand_local = chest_c;
         for (ai, arm) in arms.iter().enumerate() {
             let p = &self.plan;
             let m = arm.side;
@@ -508,15 +505,11 @@ impl Rig {
                     hand = hand.lerp(v(m * 0.15, 0.45, 0.25), pose.cower);
                 }
                 if pose.two_handed && is_left {
-                    hand = right_hand_local - (sh - hip) + chest_c - hip;
                     hand = v(0.12, -0.3, 0.38);
                 }
             }
             let chest_origin = hip + tq * Vec3::new(0.0, th * 0.9, 0.0);
             let mut target = chest_origin + tq * (hand * reach.max(0.9) * s);
-            if !is_left && primary {
-                right_hand_local = target;
-            }
             let pole = tq * v(m * 0.6, -0.8, -0.5);
             let tint = if matches!(arm.tex, Tex::Cloth | Tex::Camo) { self.plan.cloth } else { skin };
             let th_a = arm.thick * s;
@@ -866,8 +859,4 @@ pub fn weapon_tint(class: WeaponClass, seed: u32) -> [f32; 3] {
         WeaponClass::Whip => [0.9, 0.5, 0.6],
         _ => [k, k, k * 1.02],
     }
-}
-
-pub fn lerp_pose(a: f32, b: f32, t: f32) -> f32 {
-    lerp(a, b, t.clamp(0.0, 1.0))
 }

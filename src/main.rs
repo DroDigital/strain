@@ -1,3 +1,4 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 //! STRAIN — entry point: window, event loop, loading screen and settings application.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 mod anim;

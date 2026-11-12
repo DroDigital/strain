@@ -9,7 +9,6 @@ pub enum Step {
     Wait(u32),
     Hold(Action, u32),
     Tap(Action),
-    Look(f32, f32),
     Shot(&'static str),
     Do(fn(&mut Game)),
     Log(&'static str),
@@ -381,7 +380,6 @@ impl AutoTest {
                 input.inject(*a, true);
                 self.held = Some(*a);
             }
-            Step::Look(x, y) => input.look += glam::Vec2::new(*x, *y),
             Step::Shot(name) => {
                 r.capture = Some(format!("{}/{}.ppm", self.dir, name).into());
                 eprintln!("autotest: shot {name} (screen {:?}, pos {:?}, hp {:?})", g.screen, g.ppos(), g.w.actor.get(g.player).map(|a| a.hp));

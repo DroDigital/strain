@@ -232,7 +232,7 @@ impl Game {
                 _ => {
                     let (tex, c, s) = match pr.kind {
                         ProjKind::Acid => (Tex::GrowthGlow, [0.6, 1.0, 0.2], 0.25),
-                        ProjKind::Ember | ProjKind::Fireball => (Tex::Ember, [1.0, 0.6, 0.2], 0.3),
+                        ProjKind::Ember => (Tex::Ember, [1.0, 0.6, 0.2], 0.3),
                         ProjKind::BossOrb => (Tex::RiftGlow, [1.0, 0.5, 0.8], 0.55),
                         _ => (Tex::RiftGlow, [0.7, 0.6, 1.0], 0.2),
                     };
@@ -329,7 +329,6 @@ impl Game {
                 AnimKind::Tendril => {
                     let n = 6;
                     let mut prev = a.pos;
-                    let seg = a.size / n as f32;
                     // tendrils lean toward the player when near
                     let lean = flat(pp - a.pos);
                     let lean = if lean.length() < 8.0 { lean.normalize_or_zero() * (1.0 - lean.length() / 8.0) } else { Vec3::ZERO };
