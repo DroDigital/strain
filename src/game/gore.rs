@@ -59,7 +59,6 @@ const HALVES: &[&[&str]] = &[&["Head"], &["LowerArm.L"], &["LowerArm.R"], &["Upp
 const BRUTE: &[&[&str]] = &[&["Head"], &["UpperArm.L"], &["UpperArm.R"], &["Torso"]];
 const PLATED: &[&[&str]] = &[&["Head"], &["LowerArm.L"], &["LowerArm.R"]];
 const DOG: &[&[&str]] = &[&["Head"], &["FrontUpperLeg.L", "FF.L"], &["FrontUpperLeg.R", "FF.R"], &["BackUpperLeg.L", "FFB.L"], &["BackUpperLeg.R", "FFB.R"], &["Tail1"]];
-const LARVA: &[&[&str]] = &[&["UpperLeg.L", "Foot.L"], &["UpperLeg.R", "Foot.R"], &["Abdomen"]];
 const ARMS: &[&[&str]] = &[&["UpperArm.L"], &["UpperArm.R"], &["Head"]];
 const CRAWLER: &[&[&str]] = &[&["Head"], &["LowerArm.L"], &["LowerArm.R"], &["UpperArm.L"], &["UpperArm.R"], &["Torso"]];
 
@@ -88,7 +87,6 @@ pub fn profile(model: &str) -> GoreProfile {
         "Strain_MotherCinder" => p(Fx::Blood, Fx::Ember, BRUTE, false, 4.0, Special::Embers, 0.5, [0.06, 0.03, 0.02]),
         "Strain_Cantor" => p(Fx::Ichor, Fx::Bone, ARMS, true, 3.0, Special::Void, 0.6, DARK),
         "Strain_Seed" => p(Fx::Ichor, Fx::Bone, HUMAN, true, 3.0, Special::Spores, 0.7, ICHOR),
-        "Zombie_Ribcage" => p(Fx::Blood, Fx::Bone, LARVA, false, 2.5, Special::None, 1.2, DARK),
         m if m.starts_with("Zombie_") => p(Fx::Blood, Fx::Bone, HUMAN, true, 3.0, Special::None, 1.1, DARK),
         _ => p(Fx::Blood, Fx::Bone, &[], false, 2.0, Special::None, 1.0, RED),
     }

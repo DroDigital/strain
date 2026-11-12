@@ -400,7 +400,7 @@ mod tests {
         assert!(all.len() > 40);
         let get = |n: &str| all.iter().find(|m| m.name == n).unwrap();
         let human = get("Characters_Matt_SingleWeapon");
-        let zombie = get("Zombie_Chubby");
+        let zombie = get("Zombie_Basic");
         assert!(human.skinned() && zombie.skinned());
         assert!(human.clip("Slash").is_some() && zombie.clip("Walk").is_some());
         let mut p = Pose::rest(&zombie.skeleton);

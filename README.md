@@ -10,17 +10,24 @@ glam, bytemuck, serde/ron, directories, fastrand, plus gltf and png for reading 
 — renderer, skinning, animation blending, ECS, physics, AI, mixer — is custom; the art and sound
 combine CC0 (public domain) assets with procedural generation:
 
-- **Characters, weapons, vehicles and street props**: Quaternius *Zombie Apocalypse Kit* (rigged,
-  animated glTF).
-- **The infected**: fourteen custom models (every archetype and boss) made in Blender on top of
-  the kit's zombie rigs. Bone spikes, tentacles, tumours, chitin plates, maws, crystals and glowing
-  sacs are modelled in and skinned to the original skeletons. The bodies are reshaped and
-  repainted with veins, bruising, blood and ember cracks, and ambient occlusion is baked in.
-  Affixes and mutations still add procedural growths on top.
-- **Realism pass** (Blender, every human, dog and infected): heads, hands and feet re-proportioned
-  toward adult anatomy and limbs slimmed (about their own joints, so every clip still fits), flat
-  colour swatches replaced by photo materials (skin, fabric, denim, leather, hair, bone, flesh),
-  one level of creased subdivision with interpolated skin weights, and Cycles-baked occlusion.
+- **People**: Quaternius *Universal Base Characters* — anatomically proportioned male and female
+  bodies with their own skin, eyes and hair — dressed in Blender: clothing is grown from body
+  regions and draped by shrink-wrapping (it bridges hollows and rests on the body like cloth, and
+  the skin beneath is removed), then torn, holed and bloodied for the infected. The player,
+  two soldiers and four civilians.
+- **Animation**: Quaternius *Universal Animation Library* plus the Zombie Apocalypse Kit's zombie
+  clips, retargeted offline onto each body's own skeleton (world-space, bone directions aligned,
+  grounded by the feet every frame).
+- **The infected**: every archetype and boss is a person the virus has rebuilt, modelled in
+  Blender on the realistic bodies: a jaw torn open to the throat, ribs levered out of a ragged
+  chest, a skull split and peeled back, a body bloated with tumours, a bile sac swelling the
+  throat, a legless torso dragging its guts, a ribcage fused into armour, blade fingers and
+  grown-over eyes, a womb-sac of larvae, a belly opened into a stomach-maw, crystals forced
+  through the skull, a body charred and still burning, mouths up the arms and chest, a flower
+  for a head. Their skins are generated from the real ones: pallid and veined with sores,
+  flayed to the muscle, charred with glowing cracks, rotting, drained white. Affixes and
+  mutations still add procedural growths on top.
+- **Weapons, vehicles and street props**: Quaternius *Zombie Apocalypse Kit* (glTF).
 - **Surfaces**: ambientCG photo textures with their normal, roughness and occlusion maps, combined
   with procedural windows, signs, veins and glow.
 - **Sound effects and ambience**: recorded CC0 packs from OpenGameArt, several variants per sound.
@@ -137,13 +144,21 @@ byte-for-byte identical (clips are shared between models by bone name). New part
 named `T:<Tex>`, which select one of the game's texture layers. A vertex colour alpha below 1
 marks emission.
 
-Then run the realism pass over the finished characters and infected (it marks each GLB, so a
-second run is a no-op; rebuild a model with the enemy builder first to redo it):
+The people and the infected are built from the Universal Base Characters and Universal Animation
+Library packs, which the scripts download (free, CC0) into `target/asset-cache`:
 
 ```bash
-python -I tools/blender/realism.py                 # every character and infected
-python -I tools/blender/realism.py Strain_Bulk     # one
+python -I tools/blender/build_humans.py                     # people, clip libraries, skin/hair/eye textures
+python -I tools/blender/build_infected.py Strain_Carrier    # one infected (run one per process)
 ```
+
+`build_humans.py` writes `models/Human_*.glb` (each with its own skeleton), the skeleton-only clip
+libraries `models/Clips_Male.glb` / `Clips_Female.glb`, and per-character textures in
+`assets/characters/` (1024 px, with a material map: normal, roughness, subsurface). Materials
+named `C:<name>` select one of those; `T:<Tex>` a tiling photo layer. `build_infected.py` reuses
+the enemy builder's parts on the realistic bodies and writes `models/Strain_*.glb` plus the
+diseased skins. The kit dog (`Strain_Skitter`) still comes from `build_enemies.py` and
+`tools/blender/realism.py`.
 
 ## Look
 

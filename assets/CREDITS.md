@@ -21,7 +21,7 @@ Regenerate with `python3 tools/fetch_assets.py`.
 | audio | audio/* (sword) | 20 Sword Sound Effects (StarNinjas) | https://opengameart.org/content/20-sword-sound-effects-attacks-and-clashes | CC0 1.0 |
 | audio | audio/* (water) | 40 CC0 water/splash/slime SFX (rubberduck) | https://opengameart.org/content/40-cc0-water-splash-slime-sfx | CC0 1.0 |
 | audio | audio/* (zombie) | Zombies Sound Pack (artisticdude) | https://opengameart.org/content/zombies-sound-pack | CC0 1.0 |
-| infected | models/Strain_*.glb | Custom infected modelled in Blender by `tools/blender/build_enemies.py` on top of the Quaternius Zombie Apocalypse Kit characters (same skeletons and animations) | https://quaternius.com/packs/zombieapocalypsekit.html | CC0 1.0 |
+| infected | models/Strain_Skitter.glb | Built by `tools/blender/build_enemies.py` on the Quaternius Zombie Apocalypse Kit dog | https://quaternius.com/packs/zombieapocalypsekit.html | CC0 1.0 |
 | texture | textures/asphalt.png, textures/asphalt_n.png | ambientCG Asphalt031 | https://ambientcg.com/view?id=Asphalt031 | CC0 1.0 |
 | texture | textures/paving.png, textures/paving_n.png | ambientCG PavingStones128 | https://ambientcg.com/view?id=PavingStones128 | CC0 1.0 |
 | texture | textures/brick.png, textures/brick_n.png | ambientCG Bricks097 | https://ambientcg.com/view?id=Bricks097 | CC0 1.0 |
@@ -48,3 +48,6 @@ Regenerate with `python3 tools/fetch_assets.py`.
 | texture | textures/paper.png, textures/paper_n.png | ambientCG Paper005 | https://ambientcg.com/view?id=Paper005 | CC0 1.0 |
 | texture | textures/grass.png, textures/grass_n.png | ambientCG Grass004 | https://ambientcg.com/view?id=Grass004 | CC0 1.0 |
 | texture | textures/roof.png, textures/roof_n.png | ambientCG Asphalt033 | https://ambientcg.com/view?id=Asphalt033 | CC0 1.0 |
+| characters | models/Human_*.glb, models/Clips_*.glb, characters/skin_*, characters/eyes*, characters/hair* | Quaternius - Universal Base Characters (bodies, skin, eyes, hair; clothing modelled by `tools/blender/build_humans.py`) | https://quaternius.com/packs/universalbasecharacters.html | CC0 1.0 |
+| animation | models/Clips_*.glb | Quaternius - Universal Animation Library (retargeted by `tools/blender/build_humans.py`, with the kit's zombie clips) | https://quaternius.com/packs/universalanimationlibrary.html | CC0 1.0 |
+| infected | models/Strain_*.glb, characters/inf_* | Built by `tools/blender/build_infected.py` on Universal Base Characters (diseased skins generated from its skin textures) | https://quaternius.com/packs/universalbasecharacters.html | CC0 1.0 |

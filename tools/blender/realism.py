@@ -38,7 +38,7 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 MODELS = os.path.join(ROOT, "assets", "models")
 TEXTURES = os.path.join(ROOT, "assets", "textures")
 
-HUMANS = ["Characters_Lis_SingleWeapon", "Characters_Matt_SingleWeapon", "Characters_Sam_SingleWeapon", "Characters_Shaun_SingleWeapon"]
+HUMANS = ["Characters_Matt_SingleWeapon"]
 INFECTED = ["Strain_Carrier", "Strain_Shambler", "Strain_Bulk", "Strain_Skitter", "Strain_Retch", "Strain_Larva", "Strain_Bulwark", "Strain_Lurker",
             "Strain_Matron", "Strain_Digestor", "Strain_Geometer", "Strain_MotherCinder", "Strain_Cantor", "Strain_Seed"]
 # the humans and infected are now built on realistic bodies (build_humans.py, build_infected.py);
