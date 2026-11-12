@@ -106,6 +106,10 @@ pub struct Pose {
     pub aim: bool,
     pub extra_strike: f32,
     pub cower: f32,
+    /// a fresh blow's strength (0..1) and its direction in world space: the upper body is
+    /// knocked along it and recovers
+    pub flinch: f32,
+    pub hit_dir: Vec3,
 }
 
 #[derive(Clone, Debug)]
@@ -1084,6 +1088,23 @@ impl Rig {
         }
         for &j in &sk.hide {
             sp.s[j] = Vec3::splat(0.001);
+        }
+        if pose.flinch > 0.01 && pose.dead <= 0.0 {
+            let g0 = sp.globals(skel);
+            let d = Quat::from_rotation_y(-yaw) * pose.hit_dir;
+            let d = Vec3::new(d.x, d.y * 0.3, d.z).normalize_or_zero();
+            let axis = Vec3::Y.cross(d).normalize_or_zero();
+            if axis.length_squared() > 0.5 {
+                for (name, k) in [("Abdomen", 0.14), ("Torso", 0.22), ("Neck", 0.14), ("Head", 0.3), ("Back", 0.12), ("Torso2", 0.14), ("Neck2", 0.18)] {
+                    let Some(j) = skel.find(name) else { continue };
+                    let pg = match skel.joints[j].parent {
+                        Some(p) => g0[p].to_scale_rotation_translation().1,
+                        None => skel.root.to_scale_rotation_translation().1,
+                    };
+                    let qm = Quat::from_axis_angle(axis, pose.flinch * k);
+                    sp.r[j] = (pg.inverse() * qm * pg * sp.r[j]).normalize();
+                }
+            }
         }
         let globals = sp.globals(skel);
 

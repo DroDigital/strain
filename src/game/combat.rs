@@ -433,8 +433,51 @@ impl Game {
         }
         // hit-stop scaled by weight
         self.hitstop = self.hitstop.max(if a.heavy { 0.09 + a.charge * 0.05 } else { 0.05 });
-        self.shake(if a.heavy { 0.35 } else { 0.15 });
+        self.shake(if a.heavy { 0.16 } else { 0.05 });
+        if let Some(tb) = self.w.body.get(t) {
+            let d = flat(tb.pos - self.ppos()).normalize_or_zero();
+            self.cam.kick(d, if a.heavy { 0.11 + a.charge * 0.06 } else { 0.045 });
+        }
         self.pl.last_hit_target = Some((t, 4.0));
+    }
+
+    /// Sever a head or an arm from a corpse: hide the bone, throw the part as a gib, and leave
+    /// the stump pumping blood for a moment.
+    pub fn dismember(&mut self, t: Entity, dir: Vec3) {
+        let lib = self.lib.clone();
+        let Some(b) = self.w.body.get(t).copied() else { return };
+        let infected = self.w.actor.get(t).map(|a| a.team == Team::Infected).unwrap_or(true);
+        let head = dir.y < -0.3 || chance(&mut self.rng, 0.55);
+        let Some(rig) = self.w.rig.get_mut(t) else { return };
+        let scale = rig.plan.scale;
+        let Some(sk) = rig.skin.as_mut() else { return };
+        if sk.kind == crate::anim::SkinKind::Dog {
+            return;
+        }
+        let left = chance(&mut self.rng, 0.5);
+        let (joint, gib, at) = if head {
+            ("Head", "Gib_Head", rig.head)
+        } else if left {
+            ("LowerArm.L", "Gib_Arm", rig.hand_l.lerp(rig.chest, 0.3))
+        } else {
+            ("LowerArm.R", "Gib_Arm", rig.hand_r.lerp(rig.chest, 0.3))
+        };
+        if lib.models[sk.model].skeleton.find(joint).map(|j| sk.hide.contains(&j)).unwrap_or(true) {
+            return;
+        }
+        sk.hide_joint(&lib, joint);
+        let at = if at.length_squared() < 1e-6 || (at - b.pos).length() > 4.0 { b.center() + Vec3::Y * 0.5 } else { at };
+        let r = &mut self.rng;
+        let fling = flat(dir).normalize_or_zero() * rf(r, 3.0, 6.0) + Vec3::Y * rf(r, 3.0, 5.5);
+        let tint = if infected { [0.85, 0.82, 0.86, 0.0] } else { [1.0, 0.92, 0.88, 0.0] };
+        self.spawn_gib(gib, at, fling, scale.clamp(0.6, 1.6), tint);
+        let up = if head { Vec3::Y } else { (Vec3::Y * 0.4 + flat(dir) * -0.6).normalize_or_zero() };
+        self.bleeders.push((at, up, 1.4));
+        self.parts.burst(Fx::Spurt, at, up + dir * 0.5, 30, 1.6);
+        self.parts.burst(Fx::Mist, at, dir, 10, 1.5);
+        self.parts.burst(Fx::Bone, at, dir, 8, 1.0);
+        self.audio.play_at(Sfx::Rupture, at, 0.8, rf(&mut self.rng, 0.75, 0.95));
+        self.hitstop = self.hitstop.max(0.08);
     }
 
     /// The single entry point for all damage. Returns damage actually dealt.
@@ -447,6 +490,14 @@ impl Game {
         let is_player = t == self.player;
         let mut amount = amount;
         let mut poise = poise;
+        if self.is_guest(t) {
+            // co-op guests dodge through blows like the host, and block with their guard
+            let act = &ta.act;
+            if act.kind == ActKind::Dodge && act.t > 0.03 && act.t < act.dur * 0.72 && kind != DmgKind::True && kind != DmgKind::Rot {
+                return 0.0;
+            }
+            amount = self.guest_block(t, amount);
+        }
         let src_body: Option<Body> = src.and_then(|s| self.w.body.get(s).copied());
         if is_player {
             let act = ta.act.clone();
@@ -616,23 +667,35 @@ impl Game {
             Team::Infected => Fx::Ichor,
             _ => Fx::Blood,
         };
+        let infected = self.w.actor.get(t).map(|a| a.team == Team::Infected).unwrap_or(false);
         if !matches!(kind, DmgKind::Rot | DmgKind::Fire) || amount > 6.0 {
-            self.parts.burst(blood, c, dir, (3.0 + amount * 0.25).min(18.0) as u32, 1.0);
             let heavy = matches!(kind, DmgKind::Heavy | DmgKind::Rupture) || amount > 30.0;
-            if heavy {
-                self.lights_temp.push((c, Vec3::new(2.2, 1.6, 1.2), 5.0, 0.07));
+            let w = (amount / 25.0).clamp(0.3, 2.0);
+            self.parts.burst(blood, c, dir, (3.0 + amount * 0.25).min(18.0) as u32, 1.0);
+            self.parts.burst(Fx::Spurt, c + dir * 0.15, dir, (4.0 + amount * 0.3).min(22.0) as u32, w);
+            self.parts.burst(Fx::Mist, c + dir * 0.2, dir, if heavy { 6 } else { 3 }, w);
+            if amount > 14.0 {
+                let sz = 0.25 + (amount * 0.012).min(0.5);
+                let o = rf(&mut self.rng, 0.4, 1.2);
+                self.blood_decal(tb.pos + flat(dir).normalize_or_zero() * o, sz, infected);
             }
             self.audio.play_at(if heavy { Sfx::HitHeavy } else { Sfx::HitFlesh }, c, 0.7, rf(&mut self.rng, 0.85, 1.15));
-            if matches!(kind, DmgKind::Melee | DmgKind::Heavy) {
-                self.parts.burst(Fx::Sparks, c, dir, 3, 0.6);
+            // sparks only where steel meets armour, shells or plates
+            let armoured = self.w.foe.get(t).map(|f| f.plates > 0.0).unwrap_or(false) || self.w.ai.get(t).map(|a| matches!(a.kind, AiKind::Shielded | AiKind::Soldier)).unwrap_or(false);
+            if armoured && matches!(kind, DmgKind::Melee | DmgKind::Heavy) {
+                self.parts.burst(Fx::Sparks, c, dir, if heavy { 10 } else { 4 }, 0.7);
+                if heavy {
+                    self.lights_temp.push((c, Vec3::new(2.2, 1.6, 1.2), 4.0, 0.06));
+                }
             }
         }
-        if amount >= 1.0 && (src == Some(self.player) || is_player) && !matches!(kind, DmgKind::Rot | DmgKind::Fire) {
+        if self.settings.damage_numbers && amount >= 1.0 && (src == Some(self.player) || is_player) && !matches!(kind, DmgKind::Rot | DmgKind::Fire) {
             self.float_text(c + Vec3::Y * 0.4, &format!("{:.0}", amount), if is_player { [1.0, 0.3, 0.3] } else { [1.0, 1.0, 1.0] });
         }
         if is_player {
             self.hurt_flash = (self.hurt_flash + amount / 40.0).min(0.8);
-            self.shake(0.25 + (amount / 60.0).min(0.6));
+            self.shake(0.12 + (amount / 80.0).min(0.45));
+            self.cam.kick(dir, 0.08 + (amount / 120.0).min(0.2));
             self.audio.play(Sfx::Hurt, 0.4, rf(&mut self.rng, 0.9, 1.1));
             self.player_hurt_effects(src, amount, lethal);
         } else if let Some(s) = src {
@@ -667,8 +730,15 @@ impl Game {
                     return amount;
                 }
                 self.player_died(src);
+            } else if self.guest_downed(t) {
+                // a guest goes down instead of dying
             } else {
+                let brutal = matches!(kind, DmgKind::Heavy | DmgKind::Rupture) || amount > 40.0 || (kind == DmgKind::Melee && chance(&mut self.rng, 0.12));
+                let boss = self.w.foe.get(t).map(|f| f.boss.is_some()).unwrap_or(false);
                 self.kill(t, src);
+                if brutal && !boss && chance(&mut self.rng, 0.65) {
+                    self.dismember(t, dir);
+                }
             }
         }
         amount
@@ -1326,10 +1396,20 @@ impl Game {
         self.parts.burst(if team == Team::Infected { Fx::Ichor } else { Fx::Blood }, b.center(), Vec3::Y, 24, 1.6);
         let sz = self.w.rig.get(e).map(|r| r.plan.scale).unwrap_or(1.0) * crate::util::rf(&mut self.rng, 0.5, 0.9);
         self.blood_decal(b.pos, sz, team == Team::Infected);
+        self.parts.burst(Fx::Mist, b.center(), Vec3::Y, 8, 1.2);
+        if team == Team::Infected {
+            let n = self.rng.usize(0..3);
+            for _ in 0..n {
+                let r = &mut self.rng;
+                let v = Vec3::new(rf(r, -2.5, 2.5), rf(r, 2.0, 4.5), rf(r, -2.5, 2.5));
+                let sc = rf(r, 0.7, 1.3);
+                self.spawn_gib("Gib_Chunk", b.center(), v, sc, [0.75, 0.7, 0.72, 0.0]);
+            }
+        }
         if self.pl.lock == Some(e) {
             self.pl.lock = None;
         }
-        let by_player = killer.map(|k| k == self.player || self.team(k) == Some(Team::Ally)).unwrap_or(false) || (b.pos - self.ppos()).length() < 9.0;
+        let by_player = killer.map(|k| k == self.player || self.team(k) == Some(Team::Ally) || self.is_guest(k)).unwrap_or(false) || (b.pos - self.ppos()).length() < 9.0;
         if let Some(f) = self.w.foe.get(e).cloned() {
             if let Some(o) = f.origin {
                 self.consumed.insert(o);

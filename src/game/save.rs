@@ -26,10 +26,13 @@ pub struct Settings {
     pub music: f32,
     pub fov: f32,
     pub shake: f32,
+    /// floating damage numbers (off by default: wounds and blood carry the feedback)
+    #[serde(default)]
+    pub damage_numbers: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
-        Settings { gfx: GfxSettings::default(), bindings: Bindings::default(), master: 0.8, music: 0.6, fov: 70.0, shake: 1.0 }
+        Settings { gfx: GfxSettings::default(), bindings: Bindings::default(), master: 0.8, music: 0.6, fov: 70.0, shake: 1.0, damage_numbers: false }
     }
 }
 

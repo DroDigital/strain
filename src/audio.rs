@@ -58,6 +58,8 @@ pub struct MusicState {
     pub muffle: f32,
     /// closeness to the nearest fire (0..1), drives the crackle bed
     pub fire: f32,
+    /// the acoustic space: 0 open street, 1 indoors, 2 a rift (vast and dark)
+    pub space: f32,
 }
 
 /// A mono sample buffer at its own rate.
@@ -69,7 +71,9 @@ pub struct Sound {
 enum Cmd {
     /// per sound: one or more recorded variants; plus the ambience loops (rain, fire)
     Bank(Vec<Vec<Arc<Sound>>>, Vec<Arc<Sound>>),
-    Play { id: usize, l: f32, r: f32, rate: f32 },
+    /// `send`: how much goes to the reverb; `lpk`: air absorption (one-pole low-pass, 1 = none);
+    /// `itd`: inter-ear delay in seconds (positive: the source is to the right)
+    Play { id: usize, l: f32, r: f32, rate: f32, send: f32, lpk: f32, itd: f32 },
     Music(MusicState),
 }
 
@@ -79,6 +83,111 @@ struct Voice {
     rate: f64,
     l: f32,
     r: f32,
+    send: f32,
+    lpk: f32,
+    lp: [f32; 2],
+    /// read offsets (in source samples) for the left and right ear
+    dl: f64,
+    dr: f64,
+}
+
+/// Sounds heavy enough to push the music and ambience down for a moment.
+fn ducks(id: usize) -> bool {
+    [Sfx::HitHeavy, Sfx::Explode, Sfx::Rupture, Sfx::BossRoar, Sfx::Thunder].iter().any(|s| *s as usize == id)
+}
+
+struct Comb {
+    buf: Vec<f32>,
+    i: usize,
+    store: f32,
+}
+impl Comb {
+    fn new(n: usize) -> Comb {
+        Comb { buf: vec![0.0; n.max(1)], i: 0, store: 0.0 }
+    }
+    fn tick(&mut self, x: f32, fb: f32, damp: f32) -> f32 {
+        let y = self.buf[self.i];
+        self.store = y * (1.0 - damp) + self.store * damp;
+        self.buf[self.i] = x + self.store * fb;
+        self.i = (self.i + 1) % self.buf.len();
+        y
+    }
+}
+struct Allpass {
+    buf: Vec<f32>,
+    i: usize,
+}
+impl Allpass {
+    fn new(n: usize) -> Allpass {
+        Allpass { buf: vec![0.0; n.max(1)], i: 0 }
+    }
+    fn tick(&mut self, x: f32) -> f32 {
+        let b = self.buf[self.i];
+        self.buf[self.i] = x + b * 0.5;
+        self.i = (self.i + 1) % self.buf.len();
+        b - x
+    }
+}
+
+/// A small Schroeder/Freeverb-style stereo reverb whose size, damping and level follow the space.
+struct Reverb {
+    cl: Vec<Comb>,
+    cr: Vec<Comb>,
+    al: Vec<Allpass>,
+    ar: Vec<Allpass>,
+    pre: Vec<f32>,
+    pre_i: usize,
+    /// smoothed (feedback, damping, wet)
+    par: [f32; 3],
+}
+impl Reverb {
+    fn new(sr: f32) -> Reverb {
+        let k = sr / 44100.0;
+        let n = |x: f32| (x * k) as usize;
+        Reverb {
+            cl: [1116.0, 1188.0, 1277.0, 1356.0, 1422.0, 1491.0].iter().map(|x| Comb::new(n(*x))).collect(),
+            cr: [1139.0, 1211.0, 1300.0, 1379.0, 1445.0, 1514.0].iter().map(|x| Comb::new(n(*x))).collect(),
+            al: [556.0, 441.0, 341.0].iter().map(|x| Allpass::new(n(*x))).collect(),
+            ar: [579.0, 464.0, 364.0].iter().map(|x| Allpass::new(n(*x))).collect(),
+            pre: vec![0.0; n(1800.0).max(1)],
+            pre_i: 0,
+            par: [0.78, 0.35, 0.2],
+        }
+    }
+    fn tick(&mut self, x: f32, space: f32) -> (f32, f32) {
+        // street: a short bright slap off the buildings; indoors: tight and close; rift: vast
+        let target = if space < 0.5 {
+            [0.76, 0.32, 0.22]
+        } else if space < 1.5 {
+            [0.7, 0.45, 0.3]
+        } else {
+            [0.9, 0.55, 0.5]
+        };
+        for k in 0..3 {
+            self.par[k] += (target[k] - self.par[k]) * 0.00002;
+        }
+        let [fb, damp, wet] = self.par;
+        // pre-delay grows with the space
+        let pd = ((self.pre.len() as f32) * (0.25 + 0.35 * space.min(2.0))) as usize;
+        let read = (self.pre_i + self.pre.len() - pd.min(self.pre.len() - 1)) % self.pre.len();
+        let input = self.pre[read];
+        self.pre[self.pre_i] = x;
+        self.pre_i = (self.pre_i + 1) % self.pre.len();
+        let (mut l, mut r) = (0.0, 0.0);
+        for c in &mut self.cl {
+            l += c.tick(input, fb, damp);
+        }
+        for c in &mut self.cr {
+            r += c.tick(input, fb, damp);
+        }
+        for a in &mut self.al {
+            l = a.tick(l);
+        }
+        for a in &mut self.ar {
+            r = a.tick(r);
+        }
+        (l * wet * 0.12, r * wet * 0.12)
+    }
 }
 
 pub struct Audio {
@@ -391,8 +500,14 @@ struct Mixer {
     music: Music,
     sr: f32,
     lp: [f32; 2],
+    reverb: Reverb,
+    /// sidechain: heavy impacts duck the music and ambience
+    duck: f32,
 }
 impl Mixer {
+    fn new(queue: Arc<Mutex<Vec<Cmd>>>, sr: f32, seed: u32) -> Mixer {
+        Mixer { queue, bank: Vec::new(), loops: Vec::new(), loop_pos: [0.0; 2], loop_gain: [0.0; 2], seed, voices: Vec::new(), music: Music::new(), sr, lp: [0.0; 2], reverb: Reverb::new(sr), duck: 0.0 }
+    }
     fn fill(&mut self, out: &mut [f32], channels: usize) {
         if let Ok(mut q) = self.queue.try_lock() {
             for c in q.drain(..) {
@@ -401,13 +516,19 @@ impl Mixer {
                         self.bank = b;
                         self.loops = loops;
                     }
-                    Cmd::Play { id, l, r, rate } => {
+                    Cmd::Play { id, l, r, rate, send, lpk, itd } => {
                         if let Some(vars) = self.bank.get(id).filter(|v| !v.is_empty()) {
                             if self.voices.len() < 48 {
                                 self.seed = self.seed.wrapping_mul(1664525).wrapping_add(1013904223);
                                 let buf = vars[(self.seed >> 16) as usize % vars.len()].clone();
+                                // the ear facing away hears the sound a fraction of a millisecond later
+                                let d = (itd.abs() * buf.sr) as f64;
+                                let (dl, dr) = if itd > 0.0 { (d, 0.0) } else { (0.0, d) };
                                 let rate = (rate * buf.sr / self.sr) as f64;
-                                self.voices.push(Voice { buf, pos: 0.0, rate, l, r });
+                                self.voices.push(Voice { buf, pos: 0.0, rate, l, r, send, lpk, lp: [0.0; 2], dl, dr });
+                                if ducks(id) {
+                                    self.duck = self.duck.max((l + r).min(1.0));
+                                }
                             }
                         }
                     }
@@ -417,30 +538,51 @@ impl Mixer {
         }
         let vol = self.music.st.volume;
         let muffle = self.music.cur.muffle;
+        let space = self.music.st.space;
+        let duck_fall = 1.0 / (0.45 * self.sr);
         for frame in out.chunks_mut(channels) {
-            let (mut l, mut r) = self.music.next(self.sr);
+            let (ml, mr) = self.music.next(self.sr);
+            self.duck = (self.duck - duck_fall).max(0.0);
+            let bed = 1.0 - 0.5 * self.duck;
+            let (mut l, mut r) = (ml * bed, mr * bed);
             // ambience beds: rain and nearby fire
             let targets = [self.music.cur.rain * 0.55, self.music.st.fire * 0.7];
             for (k, lp) in self.loops.iter().enumerate().take(2) {
                 self.loop_gain[k] += (targets[k] - self.loop_gain[k]) * 0.00005;
                 if self.loop_gain[k] > 0.001 && lp.data.len() > 2 {
                     let i = self.loop_pos[k] as usize % lp.data.len();
-                    let s = lp.data[i] * self.loop_gain[k] * self.music.st.volume.min(1.0);
+                    let s = lp.data[i] * self.loop_gain[k] * self.music.st.volume.min(1.0) * bed;
                     l += s;
                     r += s * if k == 0 { 0.95 } else { 1.0 };
                 }
                 self.loop_pos[k] = (self.loop_pos[k] + (lp.sr / self.sr) as f64) % lp.data.len().max(1) as f64;
             }
+            let mut send = 0.0;
             for v in &mut self.voices {
-                let i = v.pos as usize;
-                if i + 1 < v.buf.data.len() {
-                    let f = (v.pos - i as f64) as f32;
-                    let s = v.buf.data[i] * (1.0 - f) + v.buf.data[i + 1] * f;
-                    l += s * v.l;
-                    r += s * v.r;
-                }
+                let read = |p: f64, d: &[f32]| -> f32 {
+                    if p < 0.0 {
+                        return 0.0;
+                    }
+                    let i = p as usize;
+                    if i + 1 >= d.len() {
+                        return 0.0;
+                    }
+                    let f = (p - i as f64) as f32;
+                    d[i] * (1.0 - f) + d[i + 1] * f
+                };
+                let sl = read(v.pos - v.dl, &v.buf.data);
+                let sr = read(v.pos - v.dr, &v.buf.data);
+                // distance takes the top end off
+                v.lp[0] += (sl - v.lp[0]) * v.lpk;
+                v.lp[1] += (sr - v.lp[1]) * v.lpk;
+                l += v.lp[0] * v.l;
+                r += v.lp[1] * v.r;
+                send += (v.lp[0] * v.l + v.lp[1] * v.r) * 0.5 * v.send;
                 v.pos += v.rate;
             }
+            let (wl, wr) = self.reverb.tick(send, space);
+            l += wl;
+            r += wr;
             // slow-time / low health muffling
             let k = 1.0 - 0.93 * muffle;
             self.lp[0] += (l - self.lp[0]) * k;
@@ -457,7 +599,7 @@ impl Mixer {
                 }
             }
         }
-        self.voices.retain(|v| (v.pos as usize) + 1 < v.buf.data.len());
+        self.voices.retain(|v| ((v.pos - v.dl.max(v.dr)) as usize) + 1 < v.buf.data.len());
     }
 }
 
@@ -473,7 +615,7 @@ impl Audio {
         let sup = device.default_output_config().ok()?;
         let cfg = sup.config();
         let channels = cfg.channels as usize;
-        let mut mixer = Mixer { queue, bank: Vec::new(), loops: Vec::new(), loop_pos: [0.0; 2], loop_gain: [0.0; 2], seed: 99, voices: Vec::new(), music: Music::new(), sr: cfg.sample_rate as f32, lp: [0.0; 2] };
+        let mut mixer = Mixer::new(queue, cfg.sample_rate as f32, 99);
         let err = |e| eprintln!("audio stream error: {e}");
         let mut scratch: Vec<f32> = Vec::new();
         let stream = match sup.sample_format() {
@@ -522,7 +664,7 @@ impl Audio {
     }
     /// Non-positional sound.
     pub fn play(&self, s: Sfx, vol: f32, rate: f32) {
-        self.send(Cmd::Play { id: s as usize, l: vol, r: vol, rate });
+        self.send(Cmd::Play { id: s as usize, l: vol, r: vol, rate, send: 0.12, lpk: 1.0, itd: 0.0 });
     }
     /// Positional sound with distance attenuation and stereo pan.
     pub fn play_at(&self, s: Sfx, pos: Vec3, vol: f32, rate: f32) {
@@ -533,7 +675,10 @@ impl Audio {
             return;
         }
         let pan = if dist > 0.01 { (d / dist).dot(self.listener_right) } else { 0.0 };
-        self.send(Cmd::Play { id: s as usize, l: att * (1.0 - pan * 0.7).min(1.0), r: att * (1.0 + pan * 0.7).min(1.0), rate });
+        // far sounds lose their highs and are mostly heard as reflections
+        let lpk = (1.0 / (1.0 + dist * 0.07)).clamp(0.12, 1.0);
+        let send = (0.2 + dist * 0.025).min(0.85);
+        self.send(Cmd::Play { id: s as usize, l: att * (1.0 - pan * 0.6).min(1.0), r: att * (1.0 + pan * 0.6).min(1.0), rate, send, lpk, itd: pan * 0.00063 });
     }
     pub fn set_music(&self, m: MusicState) {
         self.send(Cmd::Music(m));
@@ -644,7 +789,7 @@ mod tests {
     fn music_layers_stay_bounded() {
         for (combat, strain, boss) in [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 1.0)] {
             let mut m = Music::new();
-            m.st = MusicState { combat, strain, boss, mood: 2.0, rain: 1.0, wind: 1.0, volume: 1.0, music_volume: 1.0, muffle: 0.0, fire: 0.0 };
+            m.st = MusicState { combat, strain, boss, mood: 2.0, rain: 1.0, wind: 1.0, volume: 1.0, music_volume: 1.0, muffle: 0.0, fire: 0.0 , space: 1.0 };
             m.cur = m.st;
             let mut buf = Vec::new();
             for _ in 0..44100 * 2 {
@@ -659,15 +804,32 @@ mod tests {
     }
 
     #[test]
+    fn reverb_rings_out_and_decays() {
+        for space in [0.0, 1.0, 2.0] {
+            let mut rv = Reverb::new(48000.0);
+            rv.par = [[0.76, 0.32, 0.22], [0.7, 0.45, 0.3], [0.9, 0.55, 0.5]][space as usize];
+            let mut energy = [0.0f32; 4];
+            for i in 0..48000 * 2 {
+                let (l, r) = rv.tick(if i == 0 { 1.0 } else { 0.0 }, space);
+                assert!(l.is_finite() && r.is_finite());
+                energy[(i / 24000).min(3)] += l * l + r * r;
+            }
+            eprintln!("reverb space {space}: energy by half-second {energy:?}");
+            assert!(energy[0] > 1e-6, "no tail");
+            assert!(energy[3] < energy[0], "tail does not decay");
+        }
+    }
+
+    #[test]
     fn mixer_fills_stereo_buffers() {
         let q = Arc::new(Mutex::new(Vec::new()));
-        let mut mx = Mixer { queue: q.clone(), bank: Vec::new(), loops: Vec::new(), loop_pos: [0.0; 2], loop_gain: [0.0; 2], seed: 1, voices: Vec::new(), music: Music::new(), sr: 48000.0, lp: [0.0; 2] };
+        let mut mx = Mixer::new(q.clone(), 48000.0, 1);
         let (bank, loops) = load_bank();
         assert!(bank.iter().filter(|v| v.len() > 1).count() >= 20, "recorded variants missing");
         q.lock().unwrap().push(Cmd::Bank(bank, loops));
         q.lock().unwrap().push(Cmd::Music(MusicState { volume: 1.0, music_volume: 1.0, rain: 1.0, fire: 1.0, ..Default::default() }));
         for i in 0..Sfx::Count as usize {
-            q.lock().unwrap().push(Cmd::Play { id: i, l: 0.5, r: 0.5, rate: 1.0 });
+            q.lock().unwrap().push(Cmd::Play { id: i, l: 0.5, r: 0.5, rate: 1.0, send: 0.6, lpk: 0.5, itd: if i % 2 == 0 { 0.0005 } else { -0.0005 } });
         }
         let mut out = vec![0.0f32; 4096];
         for _ in 0..50 {

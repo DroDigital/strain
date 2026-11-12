@@ -57,7 +57,38 @@ Everything is rebindable in **Controls**, for keyboard/mouse and gamepad separat
 | Pause | Esc | Start |
 
 A parry staggers the attacker and opens it to a **Rupture**: press light attack next to it.
-F3 shows the frame rate, F11 toggles borderless fullscreen, F12 saves a screenshot.
+F3 shows the frame rate, F10 cycles the retro filters, F11 toggles borderless fullscreen, F12
+saves a screenshot.
+
+### Local co-op (2–4 players)
+
+Press **Start** on a second, third or fourth gamepad to drop in. You can also pick **CO-OP: ADD
+PLAYER** in the pause menu and press A on the new pad. Guests use the default pad layout:
+
+| Button | Guest action |
+| --- | --- |
+| RB / RT | light / heavy attack (swings turn toward the nearest threat) |
+| LB | block |
+| B | dodge |
+| X | heal (three charges) |
+| Select (hold) | leave |
+
+One camera frames the whole group and pulls back as it spreads out; stragglers are brought back
+to the host. A guest who would die goes down instead: stand next to them to revive them, or
+after 25 seconds they get back up on their own. Guests fight with a fire axe, a pipe or a cleaver,
+scale with the host's level and build, and follow the host through fast travel and rifts.
+
+### Retro filters
+
+Settings → **RETRO FILTER** (or F10):
+
+| Filter | Look | Scene resolution |
+| --- | --- | --- |
+| Trinitron | curved aperture-grille CRT: beams that swell on bright pixels, halation, rounded glass | 360p |
+| Camcorder | consumer VHS: chroma smear, line wobble, a tracking band, head-switch noise | 288p |
+| 32-Bit | crisp unfiltered pixels with 15-bit colour and ordered dithering | 240p |
+
+Each renders the scene at its own lower resolution, so it costs less than the unfiltered 540p.
 
 ## How it plays
 
@@ -147,6 +178,7 @@ windowed / borderless / fullscreen.
 | `game/ai.rs` | perception, steering, archetypes, affixes, soldiers, civilians, bosses |
 | `game/spawn.rs` | procedural enemy assembly, spawning, drops |
 | `game/magic.rs` | spells and Strain |
+| `game/coop.rs` | local co-op guests: joining, controls, downed and revive, the shared camera |
 | `game/player.rs`, `game/progress.rs` | controller, stats, mutations, death/Husk, Burn Pits, rifts |
 | `game/loot.rs` | items, rolls, uniques, grid inventory |
 | `game/ui.rs` | HUD and menus |
@@ -168,6 +200,8 @@ close up), `bugs` (regression checks for fixed bugs),
 street pack and the first boss),
 `spells` (all 18 spells), `stress` (every mutation and unique, every archetype at every stage),
 `progress` (Husk reclaim and rising, vendor, stash, all bosses, ending, save and continue) and
+`coop` (three guests on simulated pads: moving, fighting, downed and revived, leash, rifts, leaving),
+`gore` (blood, flinches, dismemberment and gibs), `filters` (each retro filter, timed) and
 `title` / `opening`. `STRAIN_PROFILE=1` prints CPU timings.
 
 ## Releases

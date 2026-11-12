@@ -176,7 +176,9 @@ impl Game {
         v
     }
     pub fn pause_items(&self) -> Vec<String> {
-        vec!["RESUME".into(), "INVENTORY".into(), "SETTINGS".into(), "CONTROLS".into(), "SAVE AND QUIT TO TITLE".into(), "QUIT GAME".into()]
+        let add = if self.guests.len() >= super::coop::MAX_GUESTS { "CO-OP: PARTY FULL".to_string() } else { format!("CO-OP: ADD PLAYER ({}/4)", self.guests.len() + 1) };
+        let remove = if self.guests.is_empty() { "CO-OP: (PRESS START ON ANOTHER PAD)".to_string() } else { format!("CO-OP: REMOVE PLAYER {}", self.guests.iter().map(|g| g.slot).max().unwrap_or(1) + 1) };
+        vec!["RESUME".into(), "INVENTORY".into(), "SETTINGS".into(), "CONTROLS".into(), add, remove, "SAVE AND QUIT TO TITLE".into(), "QUIT GAME".into()]
     }
     pub fn pit_items(&self) -> Vec<String> {
         let mut v = vec!["REST (HEAL, RE-SEED THE CITY)".to_string()];
@@ -197,12 +199,13 @@ impl Game {
         let g = &s.gfx;
         let lvl = |v: u8| ["LOW", "MEDIUM", "HIGH"][v.min(2) as usize].to_string();
         vec![
-            ("INTERNAL RESOLUTION".into(), format!("{}P", g.internal_height)),
+            ("INTERNAL RESOLUTION".into(), if g.scene_height() < g.internal_height { format!("{}P ({}P)", g.internal_height, g.scene_height()) } else { format!("{}P", g.internal_height) }),
             ("SHADOWS".into(), ["OFF", "LOW", "HIGH"][g.shadow_quality.min(2) as usize].into()),
             ("FOG QUALITY".into(), lvl(g.fog_quality)),
             ("PARTICLE DENSITY".into(), lvl(g.particle_density)),
             ("V-SYNC".into(), if g.vsync { "ON" } else { "OFF" }.into()),
             ("WINDOW MODE".into(), format!("{:?}", g.window_mode).to_uppercase()),
+            ("RETRO FILTER".into(), crate::render::FILTER_NAMES[g.filter.min(3) as usize].into()),
             ("MASTER VOLUME".into(), format!("{:.0}%", s.master * 100.0)),
             ("MUSIC VOLUME".into(), format!("{:.0}%", s.music * 100.0)),
             ("MOUSE SENSITIVITY".into(), format!("{:.2}", s.bindings.mouse_sens)),
@@ -210,6 +213,7 @@ impl Game {
             ("INVERT Y".into(), if s.bindings.invert_y { "ON" } else { "OFF" }.into()),
             ("FIELD OF VIEW".into(), format!("{:.0}", s.fov)),
             ("SCREEN SHAKE".into(), format!("{:.0}%", s.shake * 100.0)),
+            ("DAMAGE NUMBERS".into(), if s.damage_numbers { "ON" } else { "OFF" }.into()),
         ]
     }
 
@@ -232,13 +236,15 @@ impl Game {
                 let i = m.iter().position(|x| *x == g.window_mode).unwrap_or(0) as i32;
                 g.window_mode = m[(i + dir).rem_euclid(3) as usize];
             }
-            6 => s.master = (s.master + 0.1 * dir as f32).clamp(0.0, 1.0),
-            7 => s.music = (s.music + 0.1 * dir as f32).clamp(0.0, 1.0),
-            8 => s.bindings.mouse_sens = (s.bindings.mouse_sens + 0.1 * dir as f32).clamp(0.1, 4.0),
-            9 => s.bindings.pad_sens = (s.bindings.pad_sens + 0.1 * dir as f32).clamp(0.1, 4.0),
-            10 => s.bindings.invert_y = !s.bindings.invert_y,
-            11 => s.fov = (s.fov + 5.0 * dir as f32).clamp(55.0, 100.0),
-            _ => s.shake = (s.shake + 0.25 * dir as f32).clamp(0.0, 1.5),
+            6 => g.filter = cyc(g.filter, 4),
+            7 => s.master = (s.master + 0.1 * dir as f32).clamp(0.0, 1.0),
+            8 => s.music = (s.music + 0.1 * dir as f32).clamp(0.0, 1.0),
+            9 => s.bindings.mouse_sens = (s.bindings.mouse_sens + 0.1 * dir as f32).clamp(0.1, 4.0),
+            10 => s.bindings.pad_sens = (s.bindings.pad_sens + 0.1 * dir as f32).clamp(0.1, 4.0),
+            11 => s.bindings.invert_y = !s.bindings.invert_y,
+            12 => s.fov = (s.fov + 5.0 * dir as f32).clamp(55.0, 100.0),
+            13 => s.shake = (s.shake + 0.25 * dir as f32).clamp(0.0, 1.5),
+            _ => s.damage_numbers = !s.damage_numbers,
         }
         self.settings_dirty = true;
         self.audio.play(Sfx::UiMove, 0.4, 1.2);
@@ -355,8 +361,37 @@ impl Game {
         p.text(uw - 110.0, 20.0, "[ACCEPT] SKIP", 1.0, [0.4; 3], 1.0);
     }
 
+    /// Co-op guests: a panel each in the bottom-right corner and a tag over their heads.
+    fn ui_guests(&self, p: &mut Painter) {
+        let (uw, uh) = (p.w, p.h);
+        for (k, g) in self.guests.iter().enumerate() {
+            let col = super::coop::COLOURS[g.slot as usize % 4];
+            let x = uw - 150.0;
+            let y = uh - 46.0 - k as f32 * 30.0;
+            p.rect(x - 4.0, y - 4.0, 142.0, 26.0, [0.0; 3], 0.45);
+            p.text(x, y, &format!("P{}", g.slot + 1), 1.0, col, 1.0);
+            let frac = self.w.actor.get(g.e).map(|a| a.frac()).unwrap_or(0.0);
+            if g.down() {
+                p.text(x + 18.0, y, "DOWN", 1.0, [1.0, 0.3, 0.3], 0.6 + 0.4 * (self.ui.t * 6.0).sin().abs());
+                p.bar(x + 18.0, y + 10.0, 110.0, 4.0, (g.revive / 2.2).min(1.0), [0.5, 0.95, 0.6], 0.0);
+            } else {
+                p.bar(x + 18.0, y + 1.0, 110.0, 5.0, frac, [0.75, 0.12, 0.12], 0.0);
+                p.bar(x + 18.0, y + 9.0, 90.0, 3.0, g.stamina / 100.0, [0.55, 0.75, 0.35], 0.0);
+                for h in 0..g.heals {
+                    p.rect(x + 112.0 + h as f32 * 5.0, y + 9.0, 3.0, 3.0, [0.95, 0.55, 0.2], 0.9);
+                }
+            }
+            if let Some(b) = self.w.body.get(g.e) {
+                if let Some(s) = self.project(b.pos + Vec3::Y * (b.height + 0.35), uw, uh) {
+                    p.text(s.x - 6.0, s.y, &format!("P{}", g.slot + 1), 1.0, col, 0.85);
+                }
+            }
+        }
+    }
+
     fn ui_hud(&self, p: &mut Painter) {
         let (uw, uh) = (p.w, p.h);
+        self.ui_guests(p);
         let Some(a) = self.w.actor.get(self.player) else { return };
         let st = &self.pl.stats;
         // bars
@@ -1047,6 +1082,18 @@ impl Game {
                             self.ui.sel = 0;
                         }
                         4 => {
+                            if self.guests.len() < super::coop::MAX_GUESTS {
+                                self.join_listen = true;
+                                self.msg("PRESS A ON THE NEW CONTROLLER");
+                                self.screen = Screen::None;
+                            }
+                        }
+                        5 => {
+                            if let Some(s) = self.guests.iter().map(|g| g.slot).max() {
+                                self.remove_guest(s);
+                            }
+                        }
+                        6 => {
                             self.save();
                             self.to_title();
                         }

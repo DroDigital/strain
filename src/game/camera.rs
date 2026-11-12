@@ -10,6 +10,8 @@ pub struct Camera {
     pub eye: Vec3,
     pub target: Vec3,
     pub trauma: f32,
+    /// directional recoil from blows, springing back to zero
+    pub kick_off: Vec3,
     pub snap: bool,
     pub fov: f32,
     pub cur_dist: f32,
@@ -21,7 +23,7 @@ pub struct Camera {
 
 impl Camera {
     pub fn new() -> Camera {
-        Camera { yaw: 0.0, pitch: 0.32, dist: 4.4, eye: Vec3::ZERO, target: Vec3::ZERO, trauma: 0.0, snap: true, fov: 70.0, cur_dist: 4.4, focus: Vec3::ZERO, over: None, t: 0.0 }
+        Camera { yaw: 0.0, pitch: 0.32, dist: 4.4, eye: Vec3::ZERO, target: Vec3::ZERO, trauma: 0.0, kick_off: Vec3::ZERO, snap: true, fov: 70.0, cur_dist: 4.4, focus: Vec3::ZERO, over: None, t: 0.0 }
     }
 
     /// `look` is the mouse/stick delta; `lock` the lock-on target position.
@@ -77,6 +79,10 @@ impl Camera {
             Some(lp) => origin.lerp(lp + Vec3::Y * 1.0, 0.3),
             None => origin,
         };
+        // directional kick from blows: the view is knocked along the blow and springs back
+        self.kick_off *= (-dt * 11.0).exp();
+        self.eye += self.kick_off * shake_scale.min(1.0);
+        self.target += self.kick_off * 0.6 * shake_scale.min(1.0);
         // trauma-based shake
         self.trauma = (self.trauma - dt * 1.6).max(0.0);
         let s = self.trauma * self.trauma * 0.35 * shake_scale;
@@ -86,6 +92,11 @@ impl Camera {
             self.target += Vec3::new(n(4.0), n(5.0), n(6.0)) * s * 0.5;
         }
         self.snap = false;
+    }
+
+    /// Knock the view along `dir` (world space) by `amount` metres.
+    pub fn kick(&mut self, dir: Vec3, amount: f32) {
+        self.kick_off = (self.kick_off + dir.normalize_or_zero() * amount).clamp_length_max(0.35);
     }
 
     pub fn view(&self) -> Mat4 {

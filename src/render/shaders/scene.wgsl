@@ -216,6 +216,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     // rim light keeps silhouettes readable in fog and darkness
     let rim = pow(1.0 - max(dot(n, V), 0.0), 3.0);
     var col = albedo * light + emis + spec * (puddle * 0.9 + wet * 0.08) + albedo * rim * (G.fog_col.rgb * 1.5 + G.ambient.rgb * 0.6);
-    col = mix(col, vec3<f32>(3.0, 3.0, 3.0), in.par.y);
+    // being hit: the surface darkens and reddens, wet, rather than flashing white
+    col = mix(col, col * vec3<f32>(1.25, 0.3, 0.28) + vec3<f32>(0.06, 0.0, 0.0), clamp(in.par.y, 0.0, 1.0) * 0.75);
     return vec4<f32>(col, 1.0);
 }

@@ -328,7 +328,15 @@ impl Game {
                 _ => 2.0,
             },
         };
+        let pp = self.ppos();
+        let space = match self.area.kind {
+            AreaKind::Rift(_) => 2.0,
+            // a roof overhead means we are inside
+            AreaKind::City if crate::physics::Statics::raycast(&self.area, pp + Vec3::Y * 1.7, Vec3::Y, 9.0, crate::physics::SOLID).is_some() => 1.0,
+            AreaKind::City => 0.0,
+        };
         MusicState {
+            space,
             combat,
             strain: self.pl.strain_frac(),
             boss: if self.boss_awake && self.boss.is_some() { 1.0 } else { 0.0 },

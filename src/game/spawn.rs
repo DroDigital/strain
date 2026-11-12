@@ -140,26 +140,29 @@ impl Game {
     pub fn apply_skin(&mut self, e: Entity) {
         use crate::anim::{SkinKind, SkinRig};
         let lib = self.lib.clone();
-        let Some(ai) = self.w.ai.get(e).map(|a| a.kind).or(if e == self.player { Some(AiKind::Ally) } else { None }) else { return };
+        let guest = self.guest_slot(e);
+        let Some(ai) = self.w.ai.get(e).map(|a| a.kind).or(if e == self.player || guest.is_some() { Some(AiKind::Ally) } else { None }) else { return };
         let foe = self.w.foe.get(e).cloned();
         let seed = self.w.rig.get(e).map(|r| r.plan.seed).unwrap_or(1);
         let pick = |opts: &[&'static str]| opts[(seed as usize) % opts.len()];
         let arch = foe.as_ref().map(|f| self.t.archetypes[f.arch].id.clone()).unwrap_or_default();
-        let humans = ["Characters_Matt_SingleWeapon", "Characters_Lis_SingleWeapon", "Characters_Sam_SingleWeapon", "Characters_Shaun_SingleWeapon"];
+        let humans = ["Human_Matt", "Human_Lis", "Human_Sam", "Human_Shaun"];
         // Strain_* models are the custom infected built in Blender (tools/blender): their mutations
         // are modelled in, so they hide no bones and drop the archetype's procedural growths
         let (model, kind, scale, crawl, gun, tint): (&str, SkinKind, f32, bool, bool, [f32; 3]) = if e == self.player {
-            ("Characters_Matt_SingleWeapon", SkinKind::Human, 1.0, false, false, [1.0; 3])
+            ("Human_Player", SkinKind::Human, 1.0, false, false, [1.0; 3])
+        } else if let Some(slot) = guest {
+            (["Human_Lis", "Human_Sam", "Human_Shaun"][(slot as usize).saturating_sub(1).min(2)], SkinKind::Human, 1.0, false, false, [1.0; 3])
         } else if foe.as_ref().map(|f| f.mimic).unwrap_or(false) {
             (pick(&humans), SkinKind::Human, 1.0, false, false, [1.0; 3])
         } else if foe.as_ref().map(|f| f.husk).unwrap_or(false) {
-            ("Characters_Matt_SingleWeapon", SkinKind::Human, 1.0, false, false, [0.45, 0.4, 0.5])
+            ("Human_Player", SkinKind::Human, 1.0, false, false, [0.45, 0.4, 0.5])
         } else if let Some(bi) = foe.as_ref().and_then(|f| f.boss) {
             let m = ["Strain_Digestor", "Strain_Geometer", "Strain_MotherCinder", "Strain_Cantor", "Strain_Seed"][bi.min(4)];
             (m, SkinKind::Zombie, if bi == 4 { 0.85 } else { 1.0 }, false, false, [1.0; 3])
         } else {
             match ai {
-                AiKind::Soldier => (pick(&["Characters_Shaun_SingleWeapon", "Characters_Sam_SingleWeapon"]), SkinKind::Human, 1.0, false, true, [0.72, 0.82, 0.62]),
+                AiKind::Soldier => (pick(&["Human_Shaun", "Human_Sam"]), SkinKind::Human, 1.0, false, true, [0.82, 0.9, 0.76]),
                 AiKind::Civilian => (pick(&humans), SkinKind::Human, 0.97, false, false, [1.0; 3]),
                 AiKind::Ally => ("Strain_Larva", SkinKind::Zombie, 0.65, false, false, [0.6, 1.0, 0.6]),
                 AiKind::Crawler => ("Strain_Larva", SkinKind::Zombie, 0.75, false, false, [1.0; 3]),
