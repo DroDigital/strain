@@ -241,10 +241,18 @@ impl AutoTest {
                 Shot("soldiers"),
                 Do(|g| {
                     let p = g.ppos();
+                    // a few loose props of our own, so the check never depends on the street layout
+                    let key = g.debris.first().map(|d| d.key).unwrap_or((0, 0));
+                    for (k, name) in ["TrafficCone_1", "TrashBag_1", "CinderBlock"].iter().enumerate() {
+                        if let Some(&id) = g.lib.static_id.get(*name) {
+                            let pos = p + Vec3::new(1.5 + k as f32 * 0.6, 0.0, 2.0);
+                            g.debris.push(crate::game::debris::Debris { id, key, pos, vel: Vec3::ZERO, rot: glam::Quat::IDENTITY, spin: Vec3::ZERO, scale: 1.0, tint: [1.0; 4], mass: if k == 2 { 3.0 } else { 0.6 }, asleep: true });
+                        }
+                    }
                     let near: Vec<Vec3> = g.debris.iter().filter(|d| (d.pos - p).length() < 12.0).map(|d| d.pos).collect();
                     g.bug_debris = near.clone();
                     eprintln!("autotest: debris in city {}, within 12 m {}", g.debris.len(), near.len());
-                    if let Some(q) = near.first() {
+                    if let Some(q) = near.last() {
                         let mut z = g.make_zone(*q, crate::game::comp::ZoneKind::Blast, 3.0, 0.0, 0.5, crate::game::comp::Team::Player, None);
                         z.delay = 0.1;
                         g.add_zone(*q, z);
