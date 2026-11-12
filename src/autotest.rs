@@ -203,8 +203,20 @@ impl AutoTest {
                         let p = crate::world::chunk_center(1, (2, 2)) + Vec3::new(-24.5, 0.0, -10.0);
                         teleport(g, p);
                         g.cam.yaw = 0.4;
-                        g.spawn_archetype("brute", p + Vec3::new(-1.5, 0.0, 4.0), 2, 6, None);
-                        g.spawn_archetype("rusher", p + Vec3::new(1.2, 0.0, 5.0), 2, 6, None);
+                        if let Some(a) = g.w.actor.get_mut(g.player) {
+                            a.max_hp = 1e9;
+                            a.hp = 1e9;
+                        }
+                        for (id, o) in [("brute", Vec3::new(-1.5, 0.0, 4.0)), ("rusher", Vec3::new(1.2, 0.0, 5.0))] {
+                            let e = g.spawn_archetype(id, p + o, 2, 6, None);
+                            if let Some(a) = g.w.actor.get_mut(e) {
+                                a.speed = 0.0;
+                            }
+                            if let Some(ai) = g.w.ai.get_mut(e) {
+                                ai.cd = 99.0;
+                                ai.think = 99.0;
+                            }
+                        }
                     }),
                     Wait(30),
                 ];

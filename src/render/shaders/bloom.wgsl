@@ -31,8 +31,9 @@ fn texel(p: vec2<f32>) -> vec3<f32> {
     let d = vec2<i32>(textureDimensions(t_src));
     return textureLoad(t_src, clamp(vec2<i32>(p), vec2<i32>(0), d - 1), 0).rgb;
 }
-fn to_lin(c: vec3<f32>) -> vec3<f32> { return pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2)); }
-fn to_gam(c: vec3<f32>) -> vec3<f32> { return pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)); }
+// gamma 2.0 is close enough for the tube maths and far cheaper than pow per tap
+fn to_lin(c: vec3<f32>) -> vec3<f32> { return c * c; }
+fn to_gam(c: vec3<f32>) -> vec3<f32> { return sqrt(max(c, vec3<f32>(0.0))); }
 
 // one scanline of the tube, filtered horizontally like an analogue signal (linear light)
 fn crt_row(x: f32, row: f32) -> vec3<f32> {
@@ -49,7 +50,7 @@ fn crt_row(x: f32, row: f32) -> vec3<f32> {
 }
 
 // TRINITRON: a curved aperture-grille tube. Bright pixels bloom into wider beams, dark ones
-// leave visible gaps; a soft halation glows around highlights.
+// leave visible gaps; the post pass adds a stronger halation glow from the bloom chain.
 fn crt(uv0: vec2<f32>, frag: vec2<f32>) -> vec3<f32> {
     let res = G.screen.xy;
     var c = uv0 * 2.0 - 1.0;
@@ -68,13 +69,6 @@ fn crt(uv0: vec2<f32>, frag: vec2<f32>) -> vec3<f32> {
     let sb = mix(0.24, 0.42, sqrt(clamp(lb, 0.0, 1.0)));
     var col = a * exp(-fy * fy / (2.0 * sa * sa)) + b * exp(-(1.0 - fy) * (1.0 - fy) / (2.0 * sb * sb));
     col = col * 1.55;
-    // halation: a wide, faint glow from the bright parts of the picture
-    var halo = vec3<f32>(0.0);
-    for (var i = 0; i < 8; i = i + 1) {
-        let ang = f32(i) * 0.785398;
-        halo = halo + to_lin(texel(p + vec2<f32>(cos(ang), sin(ang)) * 2.6));
-    }
-    col = col + max(halo / 8.0 - vec3<f32>(0.25), vec3<f32>(0.0)) * 0.35;
     // aperture grille: vertical RGB phosphor stripes, three window pixels wide
     let m = u32(frag.x) % 3u;
     var mask = vec3<f32>(0.78);

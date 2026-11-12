@@ -104,7 +104,8 @@ fn fs_post(in: FsIn) -> @location(0) vec4<f32> {
     }
     col = col * trans + scat + pls * dens0 * G.fog_par.w;
 
-    col = col + textureSampleLevel(t_bloom, s_lin, uv, 0.0).rgb * 0.9;
+    // the CRT filter glows more: halation in the tube's glass
+    col = col + textureSampleLevel(t_bloom, s_lin, uv, 0.0).rgb * select(0.9, 1.6, G.post.x > 0.5 && G.post.x < 1.5);
 
     // tonemap + grade
     col = col * G.grade.rgb;
