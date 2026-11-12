@@ -6,6 +6,7 @@ pub mod rift;
 use crate::physics::{Aabb, Statics};
 use crate::render::mesh::MeshBuilder;
 use crate::render::{Renderer, StaticMesh};
+
 use glam::{Vec2, Vec3};
 use std::collections::HashMap;
 
@@ -150,6 +151,8 @@ pub struct ChunkGen {
 
 pub struct Chunk {
     pub mesh: Option<StaticMesh>,
+    /// geometry waiting to be uploaded by the renderer
+    pub pending: Option<MeshBuilder>,
     pub cols: Vec<Aabb>,
     pub lights: Vec<CLight>,
     pub emitters: Vec<(Vec3, EmitKind)>,
@@ -213,12 +216,12 @@ impl Area {
         let d = (lx - ROAD).min(CS - ROAD - lx).min(lz - ROAD).min(CS - ROAD - lz);
         (d * 0.5).clamp(0.0, 1.0) * KERB
     }
-    fn make_chunk(r: &Renderer, g: ChunkGen) -> Chunk {
-        Chunk { mesh: r.upload_mesh(&g.mesh), cols: g.cols, lights: g.lights, emitters: g.emitters, anims: g.anims, spawns: g.spawns, interact: g.interact, hazards: g.hazards }
+    fn make_chunk(g: ChunkGen) -> Chunk {
+        Chunk { mesh: None, pending: Some(g.mesh), cols: g.cols, lights: g.lights, emitters: g.emitters, anims: g.anims, spawns: g.spawns, interact: g.interact, hazards: g.hazards }
     }
     /// Load/unload city chunks around `center`. Generates at most `budget` chunks per call.
     /// Returns (newly loaded keys, unloaded keys).
-    pub fn stream(&mut self, r: &Renderer, center: Vec3, radius: i32, budget: usize) -> (Vec<(i32, i32)>, Vec<(i32, i32)>) {
+    pub fn stream(&mut self, center: Vec3, radius: i32, budget: usize) -> (Vec<(i32, i32)>, Vec<(i32, i32)>) {
         let mut loaded = Vec::new();
         let mut unloaded = Vec::new();
         if self.kind != AreaKind::City {
@@ -238,7 +241,7 @@ impl Area {
             }
             if !self.chunks.contains_key(&k) {
                 let g = kit::gen_chunk(self.seed, self.epoch, &self.bosses_dead, k.0, k.1);
-                self.chunks.insert(k, Self::make_chunk(r, g));
+                self.chunks.insert(k, Self::make_chunk(g));
                 loaded.push(k);
             }
         }
@@ -249,12 +252,26 @@ impl Area {
         }
         (loaded, unloaded)
     }
-    pub fn rift(r: &Renderer, idx: usize, seed: u32, epoch: u32) -> Area {
+    pub fn rift(idx: usize, seed: u32, epoch: u32) -> Area {
         let (gens, start, arena) = rift::gen_rift(idx, seed ^ epoch.wrapping_mul(7919));
         let mut a = Area { kind: AreaKind::Rift(idx), cell: rift::RS, chunks: HashMap::new(), seed, epoch, bosses_dead: [false; 5], start, arena };
         for (k, g) in gens {
-            a.chunks.insert(k, Self::make_chunk(r, g));
+            a.chunks.insert(k, Self::make_chunk(g));
         }
         a
+    }
+
+    /// Upload chunk geometry generated since the last frame (at most `budget` chunks).
+    pub fn upload_pending(&mut self, r: &Renderer, budget: usize) {
+        let mut n = 0;
+        for c in self.chunks.values_mut() {
+            if n >= budget {
+                break;
+            }
+            if let Some(mb) = c.pending.take() {
+                c.mesh = r.upload_mesh(&mb);
+                n += 1;
+            }
+        }
     }
 }

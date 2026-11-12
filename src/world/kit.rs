@@ -138,7 +138,8 @@ impl Gen {
                         if tex == Tex::ShopfrontLit {
                             let c = *start + *dir * ((b as f32 + 0.5) * bw);
                             let n = Vec3::new(dir.z, 0.0, -dir.x);
-                            self.light(c.x + n.x * 1.5, 2.2, c.z + n.z * 1.5, [1.6, 1.5, 1.0], 8.0, if chance(&mut self.r, 0.3) { 3 } else { 0 });
+                            let fl = if chance(&mut self.r, 0.3) { 3 } else { 0 };
+                            self.light(c.x + n.x * 1.5, 2.2, c.z + n.z * 1.5, [1.6, 1.5, 1.0], 8.0, fl);
                         }
                     }
                 } else {
@@ -188,7 +189,8 @@ impl Gen {
             let (px, pz) = ((x0 + x1) * 0.5, (z0 + z1) * 0.5);
             for i in 0..3 {
                 let s = rf(&mut self.r, 1.5, 3.5);
-                let pos = self.p(px + rf(&mut self.r, -4.0, 4.0), h, pz + rf(&mut self.r, -4.0, 4.0));
+                let (ox, oz) = (rf(&mut self.r, -4.0, 4.0), rf(&mut self.r, -4.0, 4.0));
+                let pos = self.p(px + ox, h, pz + oz);
                 self.g.anims.push(AnimProp { kind: if i == 0 { AnimKind::Pod } else { AnimKind::Tendril }, pos, yaw: i as f32, size: s });
             }
         }
@@ -235,7 +237,8 @@ impl Gen {
                 self.low(Vec3::new(sx, KERB, mz - 3.0), Vec3::new(sx + 0.6, KERB + 1.7, mz + 3.0), Tex::Metal, rgb(0.5, 0.5, 0.55), 2.0);
             }
             self.low(Vec3::new(mx - 2.0, KERB, iz0 + 1.2), Vec3::new(mx + 2.0, KERB + 1.0, iz0 + 2.0), Tex::Wood, WHITE, 2.0);
-            self.light(mx, KERB + 2.6, mz, [1.2, 1.1, 0.8], 11.0, if chance(&mut self.r, 0.5) { 3 } else { 1 });
+            let fl = if chance(&mut self.r, 0.5) { 3 } else { 1 };
+            self.light(mx, KERB + 2.6, mz, [1.2, 1.1, 0.8], 11.0, fl);
             self.spawn(mx + 3.0, mz + 3.5, SpawnKind::Cache);
             if self.state != DState::Held && chance(&mut self.r, 0.6) {
                 self.spawn(mx - 3.0, mz, SpawnKind::Infected);
@@ -479,7 +482,10 @@ impl Gen {
             }
             _ => {
                 if chance(&mut self.r, 0.55) {
-                    self.spawn(mx, mz, if self.control > 0.62 && chance(&mut self.r, 0.4) { SpawnKind::Civilians } else { SpawnKind::Infected })
+                    {
+                        let k = if self.control > 0.62 && chance(&mut self.r, 0.4) { SpawnKind::Civilians } else { SpawnKind::Infected };
+                        self.spawn(mx, mz, k)
+                    }
                 }
             }
         }
@@ -498,7 +504,8 @@ impl Gen {
         let n = self.r.u32(1..4);
         for i in 0..n {
             let burning = self.state == DState::Contested && chance(&mut self.r, 0.25);
-            self.car(x0 + 3.0 + i as f32 * 3.4, (z0 + z1) * 0.5 + rf(&mut self.r, -3.0, 3.0), false, burning);
+            let oz = rf(&mut self.r, -3.0, 3.0);
+            self.car(x0 + 3.0 + i as f32 * 3.4, (z0 + z1) * 0.5 + oz, false, burning);
         }
         self.crates(x1 - 2.5, z1 - 2.5);
         if self.state != DState::Held {
@@ -521,7 +528,8 @@ impl Gen {
                 continue;
             }
             if lost {
-                self.growth(x, z, rf(&mut self.r, 2.0, 5.0));
+                let s = rf(&mut self.r, 2.0, 5.0);
+                self.growth(x, z, s);
             } else {
                 let h = rf(&mut self.r, 3.0, 5.5);
                 self.low(Vec3::new(x - 0.15, KERB, z - 0.15), Vec3::new(x + 0.15, KERB + h, z + 0.15), Tex::Wood, rgb(0.4, 0.35, 0.3), 1.0);
@@ -555,9 +563,11 @@ impl Gen {
             let burning = self.state == DState::Contested && chance(&mut self.r, 0.3);
             let k = rf(&mut self.r, ROAD + 4.0, CS - ROAD - 4.0);
             if chance(&mut self.r, 0.5) {
-                self.car(k, rf(&mut self.r, 3.6, 5.2), true, burning);
+                let o = rf(&mut self.r, 3.6, 5.2);
+                self.car(k, o, true, burning);
             } else {
-                self.car(rf(&mut self.r, 3.6, 5.2), k, false, burning);
+                let o = rf(&mut self.r, 3.6, 5.2);
+                self.car(o, k, false, burning);
             }
         }
         match self.state {
@@ -600,7 +610,8 @@ impl Gen {
                     }
                 }
                 if chance(&mut self.r, 0.25) {
-                    let p = self.p(rf(&mut self.r, 8.0, 48.0), 0.0, 2.0);
+                    let x = rf(&mut self.r, 8.0, 48.0);
+                    let p = self.p(x, 0.0, 2.0);
                     self.g.emitters.push((p, EmitKind::Smoke));
                 }
             }
@@ -629,7 +640,8 @@ impl Gen {
         }
         // litter and a poster board
         if chance(&mut self.r, 0.5) {
-            let p = self.p(rf(&mut self.r, 8.0, 48.0), 0.1, rf(&mut self.r, 1.0, 6.0));
+            let (x, z) = (rf(&mut self.r, 8.0, 48.0), rf(&mut self.r, 1.0, 6.0));
+            let p = self.p(x, 0.1, z);
             self.g.anims.push(AnimProp { kind: AnimKind::Litter, pos: p, yaw: 0.0, size: 1.0 });
         }
         if chance(&mut self.r, 0.4) {

@@ -32,6 +32,7 @@ pub enum Action {
     TabPrev,
     TabNext,
     UiAlt,
+    UiDrop,
     Count,
 }
 pub const REBINDABLE: [(Action, &str); 15] = [
@@ -165,6 +166,10 @@ impl Input {
             text: String::new(),
         }
     }
+    /// Inject an action state (used by the scripted test driver).
+    pub fn inject(&mut self, a: Action, on: bool) {
+        self.set(a, on);
+    }
     fn set(&mut self, a: Action, on: bool) {
         let i = a as usize;
         if on && !self.down[i] {
@@ -221,7 +226,8 @@ impl Input {
             KeyCode::Escape | KeyCode::Backspace => self.set(UiBack, on),
             KeyCode::PageUp | KeyCode::BracketLeft => self.set(TabPrev, on),
             KeyCode::PageDown | KeyCode::BracketRight => self.set(TabNext, on),
-            KeyCode::Delete => self.set(UiAlt, on),
+            KeyCode::KeyR => self.set(UiAlt, on),
+            KeyCode::KeyG | KeyCode::Delete => self.set(UiDrop, on),
             _ => {}
         }
         self.apply(&Bind::Key(format!("{code:?}")), on);
@@ -278,6 +284,7 @@ impl Input {
                         Button::LeftTrigger => self.set(TabPrev, on),
                         Button::RightTrigger => self.set(TabNext, on),
                         Button::North => self.set(UiAlt, on),
+                        Button::West => self.set(UiDrop, on),
                         _ => {}
                     }
                     self.apply(&Bind::Pad(format!("{b:?}")), on);

@@ -38,12 +38,12 @@ impl<T> Store<T> {
     pub fn has(&self, e: Entity) -> bool {
         self.get(e).is_some()
     }
-    fn clear_id(&mut self, id: u32) {
+    pub(crate) fn clear_id(&mut self, id: u32) {
         if let Some(o) = self.data.get_mut(id as usize) {
             *o = None;
         }
     }
-    fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.data.clear();
     }
     /// Raw ids that currently hold this component.
@@ -66,7 +66,7 @@ macro_rules! define_world {
             alive: Vec<bool>,
             free: Vec<u32>,
             pub doomed: Vec<Entity>,
-            $(pub $name: Store<$ty>,)*
+            $(pub $name: $crate::ecs::Store<$ty>,)*
         }
         impl World {
             pub fn spawn(&mut self) -> Entity {
