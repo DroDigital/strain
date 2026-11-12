@@ -80,6 +80,55 @@ fn fs_post(in: FsIn) -> @location(0) vec4<f32> {
     }
     let depth = textureLoad(t_depth, px, 0);
     let jit = ign(in.pos.xy);
+    let res = G.screen.xy;
+
+    // camera motion blur: reproject this pixel into last frame and smear along the difference
+    {
+        let ndc0 = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
+        let w4 = G.inv_view_proj * ndc0;
+        let pc = G.prev_vp * vec4<f32>(w4.xyz / w4.w, 1.0);
+        if (pc.w > 0.01 && G.lens.z > 0.0) {
+            let puv = pc.xy / pc.w * vec2<f32>(0.5, -0.5) + 0.5;
+            var mv = (uv - puv) * G.lens.z;
+            let ml = length(mv * res);
+            if (ml > 40.0) { mv = mv * (40.0 / ml); }
+            if (length(mv * res) > 1.0) {
+                var acc = col;
+                for (var i = 1; i < 6; i = i + 1) {
+                    let o = (f32(i) + jit - 0.5) / 6.0 - 0.5;
+                    let q = vec2<i32>(clamp(uv + mv * o, vec2<f32>(0.0), vec2<f32>(0.999)) * res);
+                    acc = acc + textureLoad(t_scene, q, 0).rgb;
+                }
+                col = acc / 6.0;
+            }
+        }
+    }
+
+    // depth of field: a soft disc gather behind the focus plane (the foreground stays crisp so
+    // the player never smears over the background)
+    {
+        let ndc1 = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
+        let w5 = G.inv_view_proj * ndc1;
+        let d = length(w5.xyz / w5.w - G.cam_pos.xyz);
+        let coc = clamp((d - G.lens.x) / max(d, 0.1) * G.lens.y, 0.0, 1.0) * res.y * 0.006;
+        if (coc > 0.6) {
+            var acc = col;
+            var wsum = 1.0;
+            let a0 = jit * 6.2832;
+            for (var i = 0; i < 12; i = i + 1) {
+                let fi = f32(i);
+                let ang = a0 + fi * 2.39996;
+                let r = coc * sqrt((fi + 0.5) / 12.0);
+                let q = vec2<i32>(clamp(uv * res + vec2<f32>(cos(ang), sin(ang)) * r, vec2<f32>(0.0), res - 1.0));
+                // do not pull in sharp foreground pixels
+                let qd = textureLoad(t_depth, q, 0);
+                let ok = select(0.0, 1.0, qd >= depth - 0.0005);
+                acc = acc + textureLoad(t_scene, q, 0).rgb * ok;
+                wsum = wsum + ok;
+            }
+            col = acc / wsum;
+        }
+    }
 
     // reconstruct world position
     let ndc = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
@@ -154,8 +203,9 @@ fn fs_post(in: FsIn) -> @location(0) vec4<f32> {
         let b = dot(q, rd);
         let h = sqrt(max(dot(q, q) - b * b, 0.09));
         let r = G.light_pos[i].w;
+        // a lamp right at the lens would wash the frame out; only lights out in the fog glow
         if (h < r) {
-            let fall = 1.0 - h / r;
+            let fall = (1.0 - h / r) * smoothstep(1.5, 5.0, length(q));
             pls = pls + G.light_col[i].rgb * ((atan((dist - b) / h) - atan(-b / h)) / h) * fall * fall;
         }
     }

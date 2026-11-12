@@ -70,7 +70,7 @@ impl Game {
         let rain_n = (self.rain * 260.0 * dt * self.parts.density) as u32;
         for _ in 0..rain_n {
             let p = cam + Vec3::new(rf(&mut self.rng, -14.0, 14.0), rf(&mut self.rng, 4.0, 12.0), rf(&mut self.rng, -14.0, 14.0));
-            self.parts.push(P { pos: p, vel: Vec3::new(0.6, -16.0, 0.3), life: 0.0, max: 0.8, size: 0.012, size_end: 0.012, col: [0.55, 0.6, 0.7, 0.35], col_end: [0.55, 0.6, 0.7, 0.2], kind: 3.0, grav: 0.0, drag: 0.0, add: 0.0, stretch: 18.0, rot: 0.0, floor: false });
+            self.parts.push(P { pos: p, vel: Vec3::new(0.6, -16.0, 0.3), life: 0.0, max: 0.8, size: 0.012, size_end: 0.012, col: [0.55, 0.6, 0.7, 0.35], col_end: [0.55, 0.6, 0.7, 0.2], kind: 3.0, grav: 0.0, drag: 0.0, add: 0.0, stretch: 18.0, rot: 0.0, floor: false, stain: false });
         }
         let spore_n = ((self.spore * 50.0 + if lost_here { 6.0 } else { 1.5 }) * dt * self.parts.density) as u32 + chance(&mut self.rng, 0.2) as u32;
         for _ in 0..spore_n {

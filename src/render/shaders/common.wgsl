@@ -22,6 +22,8 @@ struct Globals {
     key: vec4<f32>,                  // xyz, enabled
     fog2: vec4<f32>,                 // elevated layer: start height, full height, density multiplier, noise amount
     wind: vec4<f32>,                 // xz drift of the fog noise (m/s), y rise, w = ground mist
+    prev_vp: mat4x4<f32>,            // last frame's view-projection, for motion blur
+    lens: vec4<f32>,                 // focus distance, depth-of-field strength, motion blur, unused
 };
 @group(0) @binding(0) var<uniform> G: Globals;
 

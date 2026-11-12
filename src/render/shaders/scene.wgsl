@@ -266,6 +266,19 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     n = normalize(mix(n, ng, puddle * 0.9));
     albedo = albedo * (1.0 - 0.3 * wet) * (1.0 - 0.25 * puddle);
 
+    // blood coverage (skinned bodies pack it into the integer part of the flash parameter):
+    // splashes and runs that grow with damage taken, glossy while wet
+    var flash = clamp(in.par.y, 0.0, 1.0);
+    if (in.par.y > 1.0) {
+        flash = fract(in.par.y);
+        let blood = floor(in.par.y) / 15.0;
+        let bn = vnoise(uv * 23.0) * 0.55 + vnoise(uv * 71.0 + 3.7) * 0.3 + vnoise(vec2<f32>(uv.x * 9.0, uv.y * 41.0)) * 0.15;
+        let m = smoothstep(1.02 - blood, 1.1 - blood, bn);
+        let clot = vnoise(uv * 140.0);
+        albedo = mix(albedo, vec3<f32>(0.16, 0.012, 0.01) * (0.6 + 0.6 * clot), m * 0.92);
+        rough = mix(rough, 0.18 + 0.3 * clot, m);
+    }
+
     let li_u = u32(max(in.par.x, 0.0) + 0.5);
     // Skin, Flesh, Vein, GutWall (see textures::Tex) scatter light under the surface
     let sss = select(0.0, 1.0, li_u == 24u || li_u == 25u || li_u == 26u || li_u == 43u);
@@ -318,7 +331,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     col = col + albedo * in.color.a * 4.0 * smoothstep(0.25, 0.7, luma + in.color.a * 0.2);
 
     // hit / seizure response: a dark, wet flush across the body instead of a white flash
-    let f = clamp(in.par.y, 0.0, 1.0);
+    let f = flash;
     col = mix(col, col * vec3<f32>(0.55, 0.32, 0.3) + albedo * vec3<f32>(0.08, 0.0, 0.0), f * 0.7);
     return vec4<f32>(col, 1.0);
 }

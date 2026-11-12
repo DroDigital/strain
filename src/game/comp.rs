@@ -138,6 +138,13 @@ pub struct Actor {
     pub tscale: f32,
     pub since_hit: f32,
     pub hit_dir: Vec3,
+    /// strength of the last hit (0..1), drives the flinch
+    pub hit_force: f32,
+    /// velocity the killing blow hands to the ragdoll, and where it struck
+    pub impulse: Vec3,
+    pub hit_at: Vec3,
+    /// blood soaked into the body (0..1)
+    pub blood: f32,
     pub fire_immune: bool,
     pub dissolve: f32,
     pub glow: f32,
@@ -173,6 +180,10 @@ impl Actor {
             tscale: 1.0,
             since_hit: 99.0,
             hit_dir: Vec3::Z,
+            hit_force: 0.0,
+            impulse: Vec3::ZERO,
+            hit_at: Vec3::ZERO,
+            blood: 0.0,
             fire_immune: false,
             dissolve: 0.0,
             glow: 0.0,

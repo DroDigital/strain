@@ -148,7 +148,7 @@ pub fn menu_list(p: &mut Painter, x: f32, y: f32, w: f32, items: &[String], sel:
     }
 }
 
-pub const SETTINGS_ROWS: usize = 13;
+pub const SETTINGS_ROWS: usize = 14;
 
 impl Game {
     fn project(&self, p: Vec3, uw: f32, uh: f32) -> Option<Vec2> {
@@ -197,7 +197,7 @@ impl Game {
         let g = &s.gfx;
         let lvl = |v: u8| ["LOW", "MEDIUM", "HIGH"][v.min(2) as usize].to_string();
         vec![
-            ("INTERNAL RESOLUTION".into(), format!("{}P", g.internal_height)),
+            ("RENDER RESOLUTION".into(), if g.internal_height == 0 { "NATIVE".to_string() } else { format!("{}P", g.internal_height) }),
             ("SHADOWS".into(), ["OFF", "LOW", "HIGH"][g.shadow_quality.min(2) as usize].into()),
             ("FOG QUALITY".into(), lvl(g.fog_quality)),
             ("PARTICLE DENSITY".into(), lvl(g.particle_density)),
@@ -210,6 +210,7 @@ impl Game {
             ("INVERT Y".into(), if s.bindings.invert_y { "ON" } else { "OFF" }.into()),
             ("FIELD OF VIEW".into(), format!("{:.0}", s.fov)),
             ("SCREEN SHAKE".into(), format!("{:.0}%", s.shake * 100.0)),
+            ("DAMAGE NUMBERS".into(), if s.damage_numbers { "ON" } else { "OFF" }.into()),
         ]
     }
 
@@ -219,9 +220,9 @@ impl Game {
         let cyc = |v: u8, n: u8| ((v as i32 + dir).rem_euclid(n as i32)) as u8;
         match row {
             0 => {
-                let opts = [360u32, 480, 540, 720];
-                let i = opts.iter().position(|v| *v == g.internal_height).unwrap_or(1) as i32;
-                g.internal_height = opts[(i + dir).clamp(0, 3) as usize];
+                let opts = [720u32, 900, 1080, 1440, 0];
+                let i = opts.iter().position(|v| *v == g.internal_height).unwrap_or(4) as i32;
+                g.internal_height = opts[(i + dir).clamp(0, 4) as usize];
             }
             1 => g.shadow_quality = cyc(g.shadow_quality, 3),
             2 => g.fog_quality = cyc(g.fog_quality, 3),
@@ -238,7 +239,8 @@ impl Game {
             9 => s.bindings.pad_sens = (s.bindings.pad_sens + 0.1 * dir as f32).clamp(0.1, 4.0),
             10 => s.bindings.invert_y = !s.bindings.invert_y,
             11 => s.fov = (s.fov + 5.0 * dir as f32).clamp(55.0, 100.0),
-            _ => s.shake = (s.shake + 0.25 * dir as f32).clamp(0.0, 1.5),
+            12 => s.shake = (s.shake + 0.25 * dir as f32).clamp(0.0, 1.5),
+            _ => s.damage_numbers = !s.damage_numbers,
         }
         self.settings_dirty = true;
         self.audio.play(Sfx::UiMove, 0.4, 1.2);

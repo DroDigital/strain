@@ -10,6 +10,7 @@ mod game;
 mod input;
 mod particles;
 mod physics;
+mod ragdoll;
 mod render;
 mod util;
 mod world;

@@ -69,6 +69,8 @@ struct Globals {
     key: [f32; 4],
     fog2: [f32; 4],
     wind: [f32; 4],
+    prev_vp: [f32; 16],
+    lens: [f32; 4],
 }
 
 #[repr(C)]
@@ -124,6 +126,11 @@ pub struct Env {
     pub wind: Vec3,
     pub exposure: f32,
     pub grain: f32,
+    /// depth of field: focus distance (m) and strength (0 = off)
+    pub dof_focus: f32,
+    pub dof: f32,
+    /// camera motion blur strength (0 = off)
+    pub motion_blur: f32,
     pub shaft: f32,
     pub light_scatter: f32,
     pub wetness: f32,
@@ -151,6 +158,9 @@ impl Default for Env {
             wind: Vec3::new(1.1, 0.12, 0.45),
             exposure: 1.0,
             grain: 0.035,
+            dof_focus: 4.0,
+            dof: 0.0,
+            motion_blur: 0.0,
             shaft: 1.0,
             light_scatter: 1.0,
             wetness: 0.5,
@@ -299,6 +309,7 @@ pub struct Renderer {
     ui_cap: u64,
     inst_scratch: Vec<Instance>,
     srgb_surface: bool,
+    prev_vp: Option<Mat4>,
     pub capture: Option<std::path::PathBuf>,
     pub adapter_info: String,
 }
@@ -797,6 +808,7 @@ impl Renderer {
             ui_cap,
             inst_scratch: Vec::new(),
             srgb_surface,
+            prev_vp: None,
             capture: None,
             adapter_info,
         }
@@ -1013,6 +1025,9 @@ impl Renderer {
         g.fog_par = [e.fog_height, steps, 150.0, e.light_scatter];
         g.fog2 = [e.fog_elev.0, e.fog_elev.1, e.fog_elev_mult, e.fog_noise];
         g.wind = e.wind.extend(e.ground_mist).into();
+        g.prev_vp = self.prev_vp.unwrap_or(vp).to_cols_array();
+        self.prev_vp = Some(vp);
+        g.lens = [e.dof_focus, e.dof, e.motion_blur, 0.0];
         g.screen = [t.w as f32, t.h as f32, 0.0, e.exposure];
         g.grade = e.grade.extend(e.saturation).into();
         g.fx = [e.grain, 0.0, e.vignette, e.strain];

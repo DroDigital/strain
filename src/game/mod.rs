@@ -7,6 +7,7 @@ pub mod comp;
 pub mod cutscene;
 pub mod debris;
 pub mod draw;
+pub mod gore;
 pub mod life;
 pub mod loot;
 pub mod magic;
@@ -192,8 +193,17 @@ pub struct Game {
     pub bot_stop_on_death: bool,
     pub bug_steps: u32,
     pub bug_yaw: f32,
-    /// ground decals: (model id, transform, seconds left)
-    pub decals: Vec<(u32, glam::Mat4, f32)>,
+    /// ground decals: (model id, transform, seconds left, tint)
+    pub decals: Vec<(u32, glam::Mat4, f32, [f32; 3])>,
+    /// severed parts in flight or lying where they fell
+    pub gibs: Vec<gore::Gib>,
+    /// stumps still pumping
+    pub bleeds: Vec<gore::Bleed>,
+    /// how the blow being resolved cuts (set by the attacker just before `deal`)
+    pub cut_ctx: Option<gore::CutCtx>,
+    /// test hook: every lethal blow dismembers
+    pub gore_force: bool,
+
     pub debris: Vec<debris::Debris>,
     pub bug_debris: Vec<Vec3>,
     pub build_start: std::time::Instant,
@@ -303,6 +313,11 @@ impl Game {
             bug_steps: 0,
             bug_yaw: 0.0,
             decals: Vec::new(),
+            gibs: Vec::new(),
+            bleeds: Vec::new(),
+            cut_ctx: None,
+            gore_force: false,
+
             debris: Vec::new(),
             bug_debris: Vec::new(),
             build_start: std::time::Instant::now(),
@@ -350,20 +365,23 @@ impl Game {
         self.speech.push((e, s.to_uppercase(), 3.5));
     }
     pub fn float_text(&mut self, p: Vec3, s: &str, c: [f32; 3]) {
-        if self.floats.len() < 40 {
+        if self.settings.damage_numbers && self.floats.len() < 40 {
             self.floats.push((p, s.to_string(), c, 1.0));
         }
     }
     /// Leave a blood splat on the ground.
     pub fn blood_decal(&mut self, p: Vec3, size: f32, ichor: bool) {
+        self.blood_decal_tinted(p, size, if ichor { [0.1, 0.02, 0.09] } else { [0.2, 0.012, 0.012] });
+    }
+    /// A pool or spatter of any fluid.
+    pub fn blood_decal_tinted(&mut self, p: Vec3, size: f32, tint: [f32; 3]) {
         let name = ["Blood_1", "Blood_2", "Blood_3"][self.rng.usize(0..3)];
         if let Some(&id) = self.lib.static_id.get(name) {
             let yaw = self.rng.f32() * std::f32::consts::TAU;
             let y = self.area.ground(p.x, p.z) + 0.01 + self.decals.len() as f32 * 0.0004;
             let m = glam::Mat4::from_scale_rotation_translation(glam::Vec3::new(size, 1.0, size), glam::Quat::from_rotation_y(yaw), glam::Vec3::new(p.x, y, p.z));
-            let _ = ichor;
-            self.decals.push((id, m, 60.0));
-            if self.decals.len() > 90 {
+            self.decals.push((id, m, 90.0, tint));
+            if self.decals.len() > 160 {
                 self.decals.remove(0);
             }
         }
@@ -621,7 +639,7 @@ impl Game {
             let c = pit_pos(0);
             let a = self.title_t * 0.05;
             self.cam.over = Some((c + Vec3::new(a.cos() * 60.0, 28.0, a.sin() * 60.0), c + Vec3::Y * 4.0));
-            self.cam.update(dt, Vec2::ZERO, false, c, None, &self.area, 0.0);
+            self.cam.update(dt, Vec2::ZERO, false, c, None, &self.area, 0.0, Default::default());
             self.stream_now(false);
             self.life_tick(dt);
             self.parts.update(dt);
@@ -760,7 +778,24 @@ impl Game {
         let look = if self.screen_allows_control() { self.input_snapshot.look } else { Vec2::ZERO };
         let shake = self.settings.shake;
         let inv = self.settings.bindings.invert_y;
-        self.cam.update(dt, look, inv, pp, lock, &self.area, shake);
+        let ctx = self.cam_ctx();
+        self.cam.update(dt, look, inv, pp, lock, &self.area, shake, ctx);
+    }
+
+    /// What the camera should react to: movement, a charging heavy, and nearby threats.
+    fn cam_ctx(&self) -> camera::CamCtx {
+        let Some(b) = self.w.body.get(self.player) else { return camera::CamCtx::default() };
+        let act = self.w.actor.get(self.player).map(|a| a.act.clone());
+        let charge = act.as_ref().filter(|a| a.charging).map(|a| a.charge).unwrap_or(0.0);
+        let (mut n, mut c) = (0.0f32, Vec3::ZERO);
+        self.hash.query(b.pos, 14.0, |id, p, _| {
+            let e = self.w.ent(id);
+            if self.w.actor.get(e).map(|a| a.alive && a.team == comp::Team::Infected).unwrap_or(false) {
+                n += 1.0;
+                c += p;
+            }
+        });
+        camera::CamCtx { vel: b.vel, sprint: self.pl.sprinting, charge, combat: (n / 4.0).min(1.0), threat: if n > 0.0 { Some(c / n) } else { None } }
     }
 
     fn player_render_pos(&self) -> Vec3 {
@@ -796,11 +831,12 @@ impl Game {
         self.status_tick(dt);
         self.pickups_tick(dt);
         self.debris_tick(dt);
+        self.gore_tick(dt);
         self.echo_tick(dt);
         self.progress_tick();
         self.life_tick(dt);
         // corpses fade and are removed
-        let dead: Vec<Entity> = self.w.actor.iter().filter(|(id, a)| !a.alive && a.dead_t > 7.5 && *id != self.player.id).map(|(id, _)| self.w.ent(id)).collect();
+        let dead: Vec<Entity> = self.w.actor.iter().filter(|(id, a)| !a.alive && a.dead_t > 29.0 && *id != self.player.id).map(|(id, _)| self.w.ent(id)).collect();
         for e in dead {
             self.mimic_plans.remove(&e.id);
             self.w.kill(e);

@@ -4,7 +4,7 @@
 use super::comp::*;
 use super::Game;
 use crate::audio::Sfx;
-use crate::data::{AffixKind, AiKind, Effect, Swing};
+use crate::data::{AffixKind, AiKind, Effect, Swing, WeaponClass};
 use crate::ecs::Entity;
 use crate::particles::Fx;
 use crate::physics::{Statics, OPAQUE};
@@ -340,13 +340,28 @@ impl Game {
         }
         let kind = if a.heavy { DmgKind::Heavy } else { DmgKind::Melee };
         let poise = mv.poise * if a.heavy { 1.0 + a.charge } else { 1.0 };
+        // how this weapon cuts: blades sever, clubs crush
+        let (class, _) = self.pl.hand_weapon(&self.t, a.left);
+        let (edge, weight) = match class {
+            WeaponClass::Knife => (0.75, 0.3),
+            WeaponClass::Cleaver => (0.9, 0.6),
+            WeaponClass::FireAxe => (1.0, 0.9),
+            WeaponClass::BoneBlade => (0.95, 0.6),
+            WeaponClass::Whip => (0.7, 0.4),
+            WeaponClass::Sledge => (0.05, 1.3),
+            WeaponClass::Pipe | WeaponClass::Baton => (0.12, 0.7),
+            _ => (0.05, 0.4),
+        };
+        let at = self.w.rig.get(pe).map(|r| r.weapon_tip).unwrap_or(tb.center());
+        self.cut_ctx = Some(super::gore::CutCtx { edge, force: weight * if a.heavy { 1.0 + a.charge * 0.6 } else { 0.7 }, at, blast: false });
         let dealt = self.deal(t, Some(pe), dmg, poise, dn, kind, mv.knock * if a.heavy { 1.0 + a.charge } else { 1.0 });
+        self.cut_ctx = None;
         if dealt <= 0.0 {
             return;
         }
         let tp = tb.center();
         if crit {
-            self.parts.burst(Fx::Sparks, tp, dn, 14, 1.4);
+            self.parts.burst(Fx::Gore, tp, dn, 8, 1.4);
             self.float_text(tp + Vec3::Y * 0.6, "CRIT", [1.0, 0.85, 0.3]);
         }
         // Strain only falls by landing melee hits
@@ -431,9 +446,17 @@ impl Game {
         if self.w.actor.get(t).map(|a| a.team == Team::Military).unwrap_or(false) {
             self.anger_squad(t);
         }
-        // hit-stop scaled by weight
-        self.hitstop = self.hitstop.max(if a.heavy { 0.09 + a.charge * 0.05 } else { 0.05 });
-        self.shake(if a.heavy { 0.35 } else { 0.15 });
+        // a brief catch as the weapon bites, longer for a committed heavy; the camera rides the blow
+        self.hitstop = self.hitstop.max(if a.heavy { 0.055 + a.charge * 0.035 } else { 0.03 });
+        self.cam.impact(dn, if a.heavy { 0.55 + a.charge * 0.4 } else { 0.22 });
+        if a.heavy {
+            self.shake(0.12 + a.charge * 0.12);
+        }
+        // a heavy that kills gets a beat of slow motion and the camera leans in
+        if !self.w.actor.get(t).map(|x| x.alive).unwrap_or(true) && (a.heavy || crit) && self.slowmo <= 0.0 {
+            self.slowmo = 0.12;
+            self.cam.kill_cam(tp, 0.55);
+        }
         self.pl.last_hit_target = Some((t, 4.0));
     }
 
@@ -591,7 +614,18 @@ impl Game {
         }
         ta.since_hit = 0.0;
         ta.hit_dir = dir;
+        let frac = amount / ta.max_hp.max(1.0);
+        if !matches!(kind, DmgKind::Rot | DmgKind::Fire) {
+            ta.hit_force = (0.25 + frac * 3.0 + if matches!(kind, DmgKind::Heavy | DmgKind::Rupture) { 0.35 } else { 0.0 }).min(1.0);
+            ta.blood = (ta.blood + 0.04 + frac * 0.8).min(1.0);
+        }
         let lethal = ta.hp <= 0.0;
+        if lethal {
+            // the killing blow throws the body
+            let k = (2.0 + knock * 0.6 + amount * 0.04).min(9.0) * if matches!(kind, DmgKind::Heavy | DmgKind::Rupture) { 1.4 } else { 1.0 };
+            ta.impulse = dir * k + Vec3::Y * k * 0.25;
+            ta.hit_at = tb.center() - dir * 0.3;
+        }
         let mut staggered = false;
         if !matches!(kind, DmgKind::Rot | DmgKind::Fire) {
             ta.poise -= poise;
@@ -617,22 +651,35 @@ impl Game {
             _ => Fx::Blood,
         };
         if !matches!(kind, DmgKind::Rot | DmgKind::Fire) || amount > 6.0 {
-            self.parts.burst(blood, c, dir, (3.0 + amount * 0.25).min(18.0) as u32, 1.0);
             let heavy = matches!(kind, DmgKind::Heavy | DmgKind::Rupture) || amount > 30.0;
+            // exit spray along the blow, a little blowback toward the attacker, and a haze
+            let at = c + dir * -0.15 + Vec3::Y * 0.15;
+            self.parts.burst(blood, at, dir, (6.0 + amount * 0.4).min(34.0) as u32, if heavy { 1.5 } else { 1.0 });
+            self.parts.burst(blood, at, -dir * 0.5 + Vec3::Y * 0.3, (2.0 + amount * 0.08).min(8.0) as u32, 0.6);
+            self.parts.burst(Fx::BloodMist, at, dir, if heavy { 3 } else { 1 }, 0.8);
             if heavy {
-                self.lights_temp.push((c, Vec3::new(2.2, 1.6, 1.2), 5.0, 0.07));
+                self.parts.burst(Fx::Gore, at, dir, (2.0 + amount * 0.1).min(10.0) as u32, 1.2);
+                if self.rng.f32() < 0.6 {
+                    let g = self.area.ground(c.x, c.z);
+                    let tint = if blood == Fx::Ichor { [0.1, 0.02, 0.09] } else { [0.2, 0.012, 0.012] };
+                    let size = rf(&mut self.rng, 0.3, 0.6);
+                    self.blood_decal_tinted(Vec3::new(c.x, g, c.z) + dir * 0.8, size, tint);
+                }
             }
             self.audio.play_at(if heavy { Sfx::HitHeavy } else { Sfx::HitFlesh }, c, 0.7, rf(&mut self.rng, 0.85, 1.15));
-            if matches!(kind, DmgKind::Melee | DmgKind::Heavy) {
-                self.parts.burst(Fx::Sparks, c, dir, 3, 0.6);
-            }
+        }
+        if !is_player {
+            self.gore_on_hit(t, src, amount, kind, dir, lethal);
+        } else {
+            self.cut_ctx = None;
         }
         if amount >= 1.0 && (src == Some(self.player) || is_player) && !matches!(kind, DmgKind::Rot | DmgKind::Fire) {
             self.float_text(c + Vec3::Y * 0.4, &format!("{:.0}", amount), if is_player { [1.0, 0.3, 0.3] } else { [1.0, 1.0, 1.0] });
         }
         if is_player {
             self.hurt_flash = (self.hurt_flash + amount / 40.0).min(0.8);
-            self.shake(0.25 + (amount / 60.0).min(0.6));
+            self.cam.impact(dir, 0.5 + (amount / 40.0).min(0.9));
+            self.shake(0.12 + (amount / 80.0).min(0.4));
             self.audio.play(Sfx::Hurt, 0.4, rf(&mut self.rng, 0.9, 1.1));
             self.player_hurt_effects(src, amount, lethal);
         } else if let Some(s) = src {
@@ -713,9 +760,10 @@ impl Game {
         self.parts.burst(Fx::Sparks, p + yaw_dir(self.player_body().yaw) * 0.5, Vec3::Y, 30, 1.6);
         self.parts.burst(Fx::Flash, p + yaw_dir(self.player_body().yaw) * 0.5, Vec3::ZERO, 1, 1.0);
         self.audio.play_at(Sfx::Parry, p, 0.9, 1.0);
-        self.hitstop = self.hitstop.max(0.14);
-        self.shake(0.3);
-        self.flash = 0.15;
+        // steel on bone: a hard catch, the camera jolts back
+        self.hitstop = self.hitstop.max(0.08);
+        self.cam.impact(-yaw_dir(self.player_body().yaw), 0.6);
+        self.shake(0.15);
         if let Some(s) = src {
             let boss = self.w.foe.get(s).map(|f| f.boss.is_some()).unwrap_or(false);
             if let Some(sa) = self.w.actor.get_mut(s) {
@@ -802,8 +850,11 @@ impl Game {
         self.parts.burst(Fx::Ichor, tb.center(), Vec3::Y, 50, 2.5);
         self.parts.burst(Fx::Bone, tb.center(), Vec3::Y, 16, 2.0);
         self.audio.play_at(Sfx::Rupture, tb.pos, 1.0, 1.0);
-        self.hitstop = 0.2;
-        self.shake(0.8);
+        self.hitstop = 0.11;
+        self.shake(0.35);
+        self.slowmo = self.slowmo.max(0.2);
+        let tc = tb.center();
+        self.cam.kill_cam(tc, 0.9);
         self.float_text(tb.center() + Vec3::Y, "RUPTURE", [1.0, 0.25, 0.4]);
         self.pl.strain = (self.pl.strain - 20.0 * st.strain_drain).max(0.0);
         let nova = st.sum(|e| if let Effect::RuptureNova(x) = e { Some(*x) } else { None });
