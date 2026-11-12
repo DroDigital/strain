@@ -176,7 +176,9 @@ impl Game {
         v
     }
     pub fn pause_items(&self) -> Vec<String> {
-        vec!["RESUME".into(), "INVENTORY".into(), "SETTINGS".into(), "CONTROLS".into(), "SAVE AND QUIT TO TITLE".into(), "QUIT GAME".into()]
+        let add = if self.guests.len() >= super::coop::MAX_GUESTS { "CO-OP: PARTY FULL".to_string() } else { format!("CO-OP: ADD PLAYER ({}/4)", self.guests.len() + 1) };
+        let remove = if self.guests.is_empty() { "CO-OP: (PRESS START ON ANOTHER PAD)".to_string() } else { format!("CO-OP: REMOVE PLAYER {}", self.guests.iter().map(|g| g.slot).max().unwrap_or(1) + 1) };
+        vec!["RESUME".into(), "INVENTORY".into(), "SETTINGS".into(), "CONTROLS".into(), add, remove, "SAVE AND QUIT TO TITLE".into(), "QUIT GAME".into()]
     }
     pub fn pit_items(&self) -> Vec<String> {
         let mut v = vec!["REST (HEAL, RE-SEED THE CITY)".to_string()];
@@ -359,8 +361,37 @@ impl Game {
         p.text(uw - 110.0, 20.0, "[ACCEPT] SKIP", 1.0, [0.4; 3], 1.0);
     }
 
+    /// Co-op guests: a panel each in the bottom-right corner and a tag over their heads.
+    fn ui_guests(&self, p: &mut Painter) {
+        let (uw, uh) = (p.w, p.h);
+        for (k, g) in self.guests.iter().enumerate() {
+            let col = super::coop::COLOURS[g.slot as usize % 4];
+            let x = uw - 150.0;
+            let y = uh - 46.0 - k as f32 * 30.0;
+            p.rect(x - 4.0, y - 4.0, 142.0, 26.0, [0.0; 3], 0.45);
+            p.text(x, y, &format!("P{}", g.slot + 1), 1.0, col, 1.0);
+            let frac = self.w.actor.get(g.e).map(|a| a.frac()).unwrap_or(0.0);
+            if g.down() {
+                p.text(x + 18.0, y, "DOWN", 1.0, [1.0, 0.3, 0.3], 0.6 + 0.4 * (self.ui.t * 6.0).sin().abs());
+                p.bar(x + 18.0, y + 10.0, 110.0, 4.0, (g.revive / 2.2).min(1.0), [0.5, 0.95, 0.6], 0.0);
+            } else {
+                p.bar(x + 18.0, y + 1.0, 110.0, 5.0, frac, [0.75, 0.12, 0.12], 0.0);
+                p.bar(x + 18.0, y + 9.0, 90.0, 3.0, g.stamina / 100.0, [0.55, 0.75, 0.35], 0.0);
+                for h in 0..g.heals {
+                    p.rect(x + 112.0 + h as f32 * 5.0, y + 9.0, 3.0, 3.0, [0.95, 0.55, 0.2], 0.9);
+                }
+            }
+            if let Some(b) = self.w.body.get(g.e) {
+                if let Some(s) = self.project(b.pos + Vec3::Y * (b.height + 0.35), uw, uh) {
+                    p.text(s.x - 6.0, s.y, &format!("P{}", g.slot + 1), 1.0, col, 0.85);
+                }
+            }
+        }
+    }
+
     fn ui_hud(&self, p: &mut Painter) {
         let (uw, uh) = (p.w, p.h);
+        self.ui_guests(p);
         let Some(a) = self.w.actor.get(self.player) else { return };
         let st = &self.pl.stats;
         // bars
@@ -1051,6 +1082,18 @@ impl Game {
                             self.ui.sel = 0;
                         }
                         4 => {
+                            if self.guests.len() < super::coop::MAX_GUESTS {
+                                self.join_listen = true;
+                                self.msg("PRESS A ON THE NEW CONTROLLER");
+                                self.screen = Screen::None;
+                            }
+                        }
+                        5 => {
+                            if let Some(s) = self.guests.iter().map(|g| g.slot).max() {
+                                self.remove_guest(s);
+                            }
+                        }
+                        6 => {
                             self.save();
                             self.to_title();
                         }

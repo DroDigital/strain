@@ -140,7 +140,8 @@ impl Game {
     pub fn apply_skin(&mut self, e: Entity) {
         use crate::anim::{SkinKind, SkinRig};
         let lib = self.lib.clone();
-        let Some(ai) = self.w.ai.get(e).map(|a| a.kind).or(if e == self.player { Some(AiKind::Ally) } else { None }) else { return };
+        let guest = self.guest_slot(e);
+        let Some(ai) = self.w.ai.get(e).map(|a| a.kind).or(if e == self.player || guest.is_some() { Some(AiKind::Ally) } else { None }) else { return };
         let foe = self.w.foe.get(e).cloned();
         let seed = self.w.rig.get(e).map(|r| r.plan.seed).unwrap_or(1);
         let pick = |opts: &[&'static str]| opts[(seed as usize) % opts.len()];
@@ -150,6 +151,8 @@ impl Game {
         // are modelled in, so they hide no bones and drop the archetype's procedural growths
         let (model, kind, scale, crawl, gun, tint): (&str, SkinKind, f32, bool, bool, [f32; 3]) = if e == self.player {
             ("Human_Player", SkinKind::Human, 1.0, false, false, [1.0; 3])
+        } else if let Some(slot) = guest {
+            (["Human_Lis", "Human_Sam", "Human_Shaun"][(slot as usize).saturating_sub(1).min(2)], SkinKind::Human, 1.0, false, false, [1.0; 3])
         } else if foe.as_ref().map(|f| f.mimic).unwrap_or(false) {
             (pick(&humans), SkinKind::Human, 1.0, false, false, [1.0; 3])
         } else if foe.as_ref().map(|f| f.husk).unwrap_or(false) {

@@ -125,6 +125,42 @@ fn mouse_idx(b: MouseButton) -> u8 {
 
 const N: usize = Action::Count as usize;
 
+/// Buttons of a guest's gamepad (fixed layout, same as the default host pad layout).
+pub const PAD_LIGHT: u32 = 1 << 0;
+pub const PAD_HEAVY: u32 = 1 << 1;
+pub const PAD_BLOCK: u32 = 1 << 2;
+pub const PAD_DODGE: u32 = 1 << 3;
+pub const PAD_INTERACT: u32 = 1 << 4;
+pub const PAD_HEAL: u32 = 1 << 5;
+pub const PAD_START: u32 = 1 << 6;
+pub const PAD_SELECT: u32 = 1 << 7;
+
+fn pad_bit(b: gilrs::Button) -> u32 {
+    use gilrs::Button::*;
+    match b {
+        RightTrigger => PAD_LIGHT,
+        RightTrigger2 => PAD_HEAVY,
+        LeftTrigger => PAD_BLOCK,
+        East => PAD_DODGE,
+        South => PAD_INTERACT,
+        West => PAD_HEAL,
+        Start => PAD_START,
+        Select => PAD_SELECT,
+        _ => 0,
+    }
+}
+
+/// One guest gamepad: sticks and buttons (held, and pressed since the game last consumed them).
+#[derive(Clone, Copy, Default, Debug)]
+pub struct PadState {
+    pub l: Vec2,
+    pub r: Vec2,
+    pub down: u32,
+    pub pressed: u32,
+    /// the pad has sent something (a pad that never has leaves the game's state alone)
+    pub live: bool,
+}
+
 pub struct Input {
     pub bindings: Bindings,
     down: [bool; N],
@@ -142,6 +178,12 @@ pub struct Input {
     gilrs: Option<gilrs::Gilrs>,
     /// When set, the next key/button press is captured as a new binding for (action, is_pad).
     pub rebinding: Option<(Action, bool)>,
+    /// co-op: pads owned by guests (their input never reaches the host), the pad the host last
+    /// used, pads asking to join, and a window during which any other pad may join with A
+    pub guest_pads: std::collections::HashMap<usize, PadState>,
+    pub host_pad: Option<usize>,
+    pub joins: Vec<usize>,
+    pub join_listen: f32,
 }
 
 impl Input {
@@ -162,6 +204,10 @@ impl Input {
             using_pad: false,
             gilrs: gilrs::Gilrs::new().ok(),
             rebinding: None,
+            guest_pads: std::collections::HashMap::new(),
+            host_pad: None,
+            joins: Vec::new(),
+            join_listen: 0.0,
         }
     }
     /// Inject an action state (used by the scripted test driver).
@@ -259,11 +305,48 @@ impl Input {
         let mut evs = Vec::new();
         if let Some(g) = &mut self.gilrs {
             while let Some(ev) = g.next_event() {
-                evs.push(ev.event);
+                evs.push((usize::from(ev.id), ev.event));
             }
         }
-        for ev in evs {
+        self.join_listen = (self.join_listen - dt).max(0.0);
+        for (pad, ev) in evs {
             use gilrs::{Axis, Button, EventType};
+            // guests' pads drive their own players
+            if let Some(ps) = self.guest_pads.get_mut(&pad) {
+                ps.live = true;
+                match ev {
+                    EventType::ButtonPressed(b, _) => {
+                        ps.down |= pad_bit(b);
+                        ps.pressed |= pad_bit(b);
+                    }
+                    EventType::ButtonReleased(b, _) => ps.down &= !pad_bit(b),
+                    EventType::AxisChanged(a, v, _) => {
+                        let v = if v.abs() < 0.18 { 0.0 } else { v };
+                        match a {
+                            Axis::LeftStickX => ps.l.x = v,
+                            Axis::LeftStickY => ps.l.y = v,
+                            Axis::RightStickX => ps.r.x = v,
+                            Axis::RightStickY => ps.r.y = v,
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            // another pad joins: Start on any pad but the host's, or A while the host is listening
+            if let EventType::ButtonPressed(b, _) = ev {
+                let other = self.host_pad.is_some_and(|h| h != pad);
+                if (b == Button::Start && other) || (self.join_listen > 0.0 && Some(pad) != self.host_pad && matches!(b, Button::South | Button::Start)) {
+                    if !self.joins.contains(&pad) {
+                        self.joins.push(pad);
+                    }
+                    continue;
+                }
+            }
+            if matches!(ev, EventType::ButtonPressed(..)) {
+                self.host_pad = Some(pad);
+            }
             match ev {
                 EventType::ButtonPressed(b, _) | EventType::ButtonReleased(b, _) => {
                     let on = matches!(ev, EventType::ButtonPressed(..));

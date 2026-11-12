@@ -490,6 +490,14 @@ impl Game {
         let is_player = t == self.player;
         let mut amount = amount;
         let mut poise = poise;
+        if self.is_guest(t) {
+            // co-op guests dodge through blows like the host, and block with their guard
+            let act = &ta.act;
+            if act.kind == ActKind::Dodge && act.t > 0.03 && act.t < act.dur * 0.72 && kind != DmgKind::True && kind != DmgKind::Rot {
+                return 0.0;
+            }
+            amount = self.guest_block(t, amount);
+        }
         let src_body: Option<Body> = src.and_then(|s| self.w.body.get(s).copied());
         if is_player {
             let act = ta.act.clone();
@@ -722,6 +730,8 @@ impl Game {
                     return amount;
                 }
                 self.player_died(src);
+            } else if self.guest_downed(t) {
+                // a guest goes down instead of dying
             } else {
                 let brutal = matches!(kind, DmgKind::Heavy | DmgKind::Rupture) || amount > 40.0 || (kind == DmgKind::Melee && chance(&mut self.rng, 0.12));
                 let boss = self.w.foe.get(t).map(|f| f.boss.is_some()).unwrap_or(false);
@@ -1399,7 +1409,7 @@ impl Game {
         if self.pl.lock == Some(e) {
             self.pl.lock = None;
         }
-        let by_player = killer.map(|k| k == self.player || self.team(k) == Some(Team::Ally)).unwrap_or(false) || (b.pos - self.ppos()).length() < 9.0;
+        let by_player = killer.map(|k| k == self.player || self.team(k) == Some(Team::Ally) || self.is_guest(k)).unwrap_or(false) || (b.pos - self.ppos()).length() < 9.0;
         if let Some(f) = self.w.foe.get(e).cloned() {
             if let Some(o) = f.origin {
                 self.consumed.insert(o);

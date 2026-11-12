@@ -5,6 +5,7 @@ pub mod camera;
 pub mod combat;
 pub mod comp;
 pub mod cutscene;
+pub mod coop;
 pub mod debris;
 pub mod draw;
 pub mod life;
@@ -197,6 +198,11 @@ pub struct Game {
     pub debris: Vec<debris::Debris>,
     /// (position, direction, seconds left) of wounds still spurting after a kill
     pub bleeders: Vec<(glam::Vec3, glam::Vec3, f32)>,
+    /// local co-op guests and their pads' input for this frame
+    pub guests: Vec<coop::Guest>,
+    pub guest_input: std::collections::HashMap<usize, crate::input::PadState>,
+    /// the pause menu asked for a new controller to join
+    pub join_listen: bool,
     pub bug_debris: Vec<Vec3>,
     pub build_start: std::time::Instant,
     pub build_ms: f32,
@@ -307,6 +313,9 @@ impl Game {
             decals: Vec::new(),
             debris: Vec::new(),
             bleeders: Vec::new(),
+            guests: Vec::new(),
+            guest_input: std::collections::HashMap::new(),
+            join_listen: false,
             bug_debris: Vec::new(),
             build_start: std::time::Instant::now(),
             build_ms: 0.0,
@@ -570,7 +579,32 @@ impl Game {
     }
 
     fn snapshot_input(&mut self, input: &mut Input, r: &Renderer, dt: f32) {
+        // co-op: route guests' pads to them, take join requests
+        let pads: Vec<usize> = self.guests.iter().map(|g| g.pad).collect();
+        input.guest_pads.retain(|k, _| pads.contains(k));
+        for p in &pads {
+            input.guest_pads.entry(*p).or_default();
+        }
+        if std::mem::take(&mut self.join_listen) {
+            input.join_listen = 8.0;
+        }
         input.poll_pad(dt);
+        for pad in std::mem::take(&mut input.joins) {
+            if self.screen != Screen::Title && self.screen != Screen::Loading {
+                self.add_guest(pad);
+                input.join_listen = 0.0;
+                if self.screen == Screen::Pause {
+                    self.screen = Screen::None;
+                }
+            }
+        }
+        for (pad, ps) in input.guest_pads.iter_mut().filter(|(_, ps)| ps.live) {
+            let e = self.guest_input.entry(*pad).or_default();
+            let pressed = e.pressed | ps.pressed;
+            *e = *ps;
+            e.pressed = pressed;
+            ps.pressed = 0;
+        }
         let all = [
             Action::MoveF, Action::MoveB, Action::MoveL, Action::MoveR, Action::Light, Action::Heavy, Action::Block, Action::Dodge, Action::Interact, Action::Heal, Action::Cast, Action::NextSpell, Action::LockOn, Action::Menu, Action::Pause, Action::UiUp, Action::UiDown, Action::UiLeft, Action::UiRight, Action::UiAccept, Action::UiBack, Action::TabPrev, Action::TabNext, Action::UiAlt, Action::UiDrop,
         ];
@@ -758,12 +792,17 @@ impl Game {
         self.stream_now(false);
 
         // camera
-        let pp = self.player_render_pos();
+        let host = self.player_render_pos();
+        // co-op: one camera frames the whole group, pulling back as it spreads out
+        let (pp, extra) = self.party_frame(host);
+        let base_dist = self.cam.dist;
+        self.cam.dist = base_dist + extra;
         let lock = self.pl.lock.and_then(|l| self.w.body.get(l)).map(|b| b.pos);
         let look = if self.screen_allows_control() { self.input_snapshot.look } else { Vec2::ZERO };
         let shake = self.settings.shake;
         let inv = self.settings.bindings.invert_y;
         self.cam.update(dt, look, inv, pp, lock, &self.area, shake);
+        self.cam.dist = base_dist;
     }
 
     fn player_render_pos(&self) -> Vec3 {
@@ -790,6 +829,7 @@ impl Game {
         self.sanitize_handles();
         self.rebuild_hash();
         self.player_tick(dt);
+        self.coop_tick(dt);
         self.ai_tick(dt);
         self.actions_tick(dt);
         self.integrate(dt);
@@ -803,7 +843,7 @@ impl Game {
         self.progress_tick();
         self.life_tick(dt);
         // corpses fade and are removed
-        let dead: Vec<Entity> = self.w.actor.iter().filter(|(id, a)| !a.alive && a.dead_t > 7.5 && *id != self.player.id).map(|(id, _)| self.w.ent(id)).collect();
+        let dead: Vec<Entity> = self.w.actor.iter().filter(|(id, a)| !a.alive && a.dead_t > 7.5 && *id != self.player.id).map(|(id, _)| self.w.ent(id)).filter(|e| !self.is_guest(*e)).collect();
         for e in dead {
             self.mimic_plans.remove(&e.id);
             self.w.kill(e);

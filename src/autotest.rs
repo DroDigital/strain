@@ -3,7 +3,8 @@
 use crate::game::{Game, Screen};
 use crate::input::{Action, Input};
 use crate::render::Renderer;
-use glam::Vec3;
+use crate::util::yaw_dir;
+use glam::{Vec2, Vec3};
 
 const ZOO_SHOTS: [&str; 14] = ["zoo_rusher", "zoo_rusher2", "zoo_brute", "zoo_leaper", "zoo_spitter", "zoo_crawler", "zoo_shielded", "zoo_ambusher", "zoo_summoner", "zoo_boss0", "zoo_boss1", "zoo_boss2", "zoo_boss3", "zoo_boss4"];
 static ZOO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -61,6 +62,7 @@ fn zoo_next(g: &mut Game) {
 }
 
 static GORE: std::sync::Mutex<Vec<crate::ecs::Entity>> = std::sync::Mutex::new(Vec::new());
+static COOP_POS: std::sync::Mutex<Vec<Vec3>> = std::sync::Mutex::new(Vec::new());
 static FILTER_CLOCK: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
 fn set_filter(g: &mut Game, f: u8) {
@@ -284,6 +286,113 @@ impl AutoTest {
                 Shot("gore_after"),
                 Log("gore done"),
             ],
+            "coop" => {
+                // three guests on simulated pads: join, move, fight, go down and get revived,
+                // get pulled back when they stray, follow the host into a rift, leave
+                fn pads(g: &mut Game, l: Vec2, pressed: u32) {
+                    for pad in [101usize, 102, 103] {
+                        let e = g.guest_input.entry(pad).or_default();
+                        e.l = l;
+                        e.pressed |= pressed;
+                    }
+                }
+                let mut v = vec![
+                    Wait(10),
+                    Do(|g| {
+                        std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                        g.new_game();
+                        g.tod = 0.45;
+                        let p = crate::world::chunk_center(1, (2, 2)) + Vec3::new(-24.5, 0.0, -10.0);
+                        teleport(g, p);
+                        g.cam.yaw = 0.0;
+                        for pad in [101usize, 102, 103] {
+                            g.add_guest(pad);
+                        }
+                        if let Some(a) = g.w.actor.get_mut(g.player) {
+                            a.max_hp = 1e9;
+                            a.hp = 1e9;
+                        }
+                        eprintln!("autotest: coop: guests {} (bodies {})", g.guests.len(), g.guests.iter().filter(|x| g.w.body.get(x.e).is_some()).count());
+                        *GORE.lock().unwrap() = g.guests.iter().map(|x| x.e).collect();
+                    }),
+                    Wait(20),
+                    Shot("coop_group"),
+                    Do(|g| {
+                        let before: Vec<Vec3> = g.guests.iter().map(|x| g.w.body.get(x.e).unwrap().pos).collect();
+                        COOP_POS.lock().unwrap().clone_from(&before);
+                    }),
+                ];
+                for _ in 0..30 {
+                    v.push(Do(|g| pads(g, Vec2::new(0.0, 1.0), 0)));
+                    v.push(Wait(1));
+                }
+                v.push(Do(|g| {
+                    pads(g, Vec2::ZERO, 0);
+                    let before = COOP_POS.lock().unwrap().clone();
+                    let moved = g.guests.iter().zip(before).filter(|(x, b)| (g.w.body.get(x.e).unwrap().pos - *b).length() > 1.0).count();
+                    eprintln!("autotest: coop: guests that walked with their sticks: {moved}");
+                    // a carrier in front of each guest, facing them
+                    let mut pack = Vec::new();
+                    let gs: Vec<(Vec3, f32)> = g.guests.iter().map(|x| { let b = g.w.body.get(x.e).unwrap(); (b.pos, b.yaw) }).collect();
+                    for (p, yaw) in gs {
+                        let e = g.spawn_archetype("rusher", p + yaw_dir(yaw) * 1.3, 1, 1, None);
+                        if let Some(a) = g.w.actor.get_mut(e) { a.speed = 0.0; }
+                        if let Some(ai) = g.w.ai.get_mut(e) { ai.cd = 99.0; ai.think = 99.0; }
+                        pack.push(e);
+                    }
+                    *GORE.lock().unwrap() = pack;
+                }));
+                v.push(Wait(10));
+                for _ in 0..40 {
+                    v.push(Do(|g| pads(g, Vec2::ZERO, crate::input::PAD_LIGHT)));
+                    v.push(Wait(6));
+                }
+                v.push(Shot("coop_fight"));
+                v.push(Do(|g| {
+                    let pack = GORE.lock().unwrap().clone();
+                    let dead = pack.iter().filter(|e| g.w.actor.get(**e).map(|a| !a.alive).unwrap_or(true)).count();
+                    let hurt = pack.iter().filter(|e| g.w.actor.get(**e).map(|a| a.hp < a.max_hp).unwrap_or(true)).count();
+                    eprintln!("autotest: coop: guests' targets wounded {hurt}/3, killed {dead}/3 (guests up {})", g.guests.iter().filter(|x| !x.down()).count());
+                    // knock P2 down; the host walks over to revive
+                    let e = g.guests[0].e;
+                    g.deal(e, None, 1e7, 0.0, Vec3::Z, crate::game::combat::DmgKind::True, 0.0);
+                    eprintln!("autotest: coop: P2 down after a lethal blow: {}", g.guests[0].down());
+                    g.screen = Screen::None;
+                    let gp = g.w.body.get(e).unwrap().pos;
+                    teleport(g, gp + Vec3::new(1.0, 0.0, 0.0));
+                }));
+                for _ in 0..18 {
+                    // level-up offers from the guests' kills would pause the game
+                    v.push(Do(|g| g.screen = Screen::None));
+                    v.push(Wait(10));
+                }
+                v.push(Do(|g| {
+                    eprintln!("autotest: coop: P2 revived by the host: {} (screen {:?})", !g.guests[0].down(), g.screen);
+                    g.screen = Screen::None;
+                    // P3 strays far away
+                    let e = g.guests[1].e;
+                    if let Some(b) = g.w.body.get_mut(e) {
+                        b.pos += Vec3::new(40.0, 0.0, 0.0);
+                    }
+                }));
+                v.push(Wait(5));
+                v.push(Do(|g| {
+                    let d = (g.w.body.get(g.guests[1].e).unwrap().pos - g.ppos()).length();
+                    eprintln!("autotest: coop: straggler pulled back: {} ({d:.1} m from the host)", d < 6.0);
+                    g.screen = Screen::None;
+                    g.enter_rift(0);
+                }));
+                v.push(Wait(60));
+                v.push(Shot("coop_rift"));
+                v.push(Do(|g| {
+                    let near = g.guests.iter().filter(|x| g.w.body.get(x.e).map(|b| (b.pos - g.ppos()).length() < 6.0).unwrap_or(false)).count();
+                    eprintln!("autotest: coop: guests with the host in the rift: {near}/{}", g.guests.len());
+                    g.remove_guest(3);
+                    eprintln!("autotest: coop: after P4 left: {} guests", g.guests.len());
+                }));
+                v.push(Log("coop done"));
+                v
+            }
             "roam" => vec![
                 Wait(10),
                 Do(|g| {
