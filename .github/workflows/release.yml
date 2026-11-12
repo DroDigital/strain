@@ -49,7 +49,7 @@ jobs:
           path: strain-windows-x86_64.zip
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
