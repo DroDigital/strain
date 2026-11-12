@@ -300,7 +300,7 @@ mod tests {
             let gl = r.globals(skel);
             assert!(gl.iter().all(|m| m.is_finite()), "{name}: non-finite pose");
             let top = r.pts.iter().zip(&r.sim).filter(|(_, s)| **s).map(|(p, _)| p.y).fold(f32::MIN, f32::max);
-            eprintln!("{name}: settled={} top={top:.2} centre={:?}", r.asleep, r.center());
+            eprintln!("{name}: settled={} top={top:.2}", r.asleep);
             assert!(top < 1.0, "{name}: ragdoll did not collapse (top {top})");
             assert!(r.pts.iter().all(|p| p.y > -0.05), "{name}: fell through the floor");
             // bones keep their length

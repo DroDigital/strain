@@ -205,7 +205,7 @@ impl Game {
                 e.fog_elev_mult = 3.4 + self.fogw * 2.0;
                 e.fog_noise = 0.75;
                 e.wind = Vec3::new(1.2, 0.1, 0.5) * (1.0 + self.rain);
-                e.exposure = 1.05 - 0.15 * day + 0.25 * (1.0 - day);
+                e.exposure = 0.85 - 0.1 * day + 0.4 * (1.0 - day);
                 e.grade = Vec3::from(dd.grade);
                 // photographic grade: muted, never pushed past natural saturation
                 e.saturation = dd.saturation.min(0.95) * 0.92;

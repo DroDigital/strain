@@ -402,12 +402,87 @@ pub struct Library {
     pub static_id: HashMap<String, u32>,
     pub skin_id: HashMap<String, u32>,
     pub index: HashMap<String, usize>,
+    /// breakable props: fragment mesh ids and each fragment's centre in model space
+    pub fragments: HashMap<String, Vec<(u32, Vec3)>>,
+}
+
+/// Kit props that shatter, with roughly how many pieces.
+pub const BREAKABLE: [(&str, usize); 9] = [
+    ("Pallet", 7),
+    ("Barrel", 6),
+    ("PlasticBarrier", 5),
+    ("TrafficBarrier_1", 6),
+    ("TrafficBarrier_2", 6),
+    ("Couch", 8),
+    ("Chest", 6),
+    ("FireHydrant", 4),
+    ("Pipes", 5),
+];
+
+/// Split a mesh into `k` pieces by clustering its triangles (k-means on triangle centres).
+/// Each piece is re-centred on its own centre so it can tumble about it.
+pub fn fracture(m: &MeshBuilder, k: usize) -> Vec<(MeshBuilder, Vec3)> {
+    let tris: Vec<[u32; 3]> = m.idx.chunks(3).filter(|t| t.len() == 3).map(|t| [t[0], t[1], t[2]]).collect();
+    if tris.is_empty() {
+        return Vec::new();
+    }
+    let cen: Vec<Vec3> = tris.iter().map(|t| (Vec3::from(m.verts[t[0] as usize].pos) + Vec3::from(m.verts[t[1] as usize].pos) + Vec3::from(m.verts[t[2] as usize].pos)) / 3.0).collect();
+    let k = k.min(tris.len()).max(1);
+    // farthest-point seeds, then a few Lloyd iterations
+    let mut seeds = vec![cen[0]];
+    while seeds.len() < k {
+        let far = cen.iter().copied().max_by(|a, b| {
+            let da = seeds.iter().map(|s| (*s - *a).length_squared()).fold(f32::MAX, f32::min);
+            let db = seeds.iter().map(|s| (*s - *b).length_squared()).fold(f32::MAX, f32::min);
+            da.total_cmp(&db)
+        });
+        seeds.push(far.unwrap());
+    }
+    let mut owner = vec![0usize; tris.len()];
+    for _ in 0..8 {
+        for (i, c) in cen.iter().enumerate() {
+            owner[i] = (0..k).min_by(|&a, &b| (seeds[a] - *c).length_squared().total_cmp(&(seeds[b] - *c).length_squared())).unwrap();
+        }
+        let mut sum = vec![(Vec3::ZERO, 0.0f32); k];
+        for (i, c) in cen.iter().enumerate() {
+            sum[owner[i]].0 += *c;
+            sum[owner[i]].1 += 1.0;
+        }
+        for j in 0..k {
+            if sum[j].1 > 0.0 {
+                seeds[j] = sum[j].0 / sum[j].1;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for j in 0..k {
+        let mut mb = MeshBuilder::new();
+        let mut map: HashMap<u32, u32> = HashMap::new();
+        for (i, t) in tris.iter().enumerate() {
+            if owner[i] != j {
+                continue;
+            }
+            for &v in t {
+                let n = *map.entry(v).or_insert_with(|| {
+                    let mut vv = m.verts[v as usize];
+                    vv.pos = (Vec3::from(vv.pos) - seeds[j]).into();
+                    mb.verts.push(vv);
+                    mb.verts.len() as u32 - 1
+                });
+                mb.idx.push(n);
+            }
+        }
+        if !mb.idx.is_empty() {
+            out.push((mb, seeds[j]));
+        }
+    }
+    out
 }
 impl Library {
     /// Load every model, appending static meshes to the primitive buffer.
     pub fn build(prims: &mut MeshBuilder, ranges: &mut Vec<super::mesh::MeshRange>) -> Library {
         let models = load_all();
-        let mut lib = Library { models: Vec::new(), static_id: HashMap::new(), skin_id: HashMap::new(), index: HashMap::new() };
+        let mut lib = Library { models: Vec::new(), static_id: HashMap::new(), skin_id: HashMap::new(), index: HashMap::new(), fragments: HashMap::new() };
         let mut skin_n = 0u32;
         for m in models {
             if !m.mesh.idx.is_empty() {
@@ -415,6 +490,16 @@ impl Library {
                 ranges.push(super::mesh::MeshRange { first: prims.idx.len() as u32, count: m.mesh.idx.len() as u32, base: prims.verts.len() as i32 });
                 prims.verts.extend_from_slice(&m.mesh.verts);
                 prims.idx.extend_from_slice(&m.mesh.idx);
+                if let Some(&(_, k)) = BREAKABLE.iter().find(|b| b.0 == m.name) {
+                    let mut frags = Vec::new();
+                    for (mb, c) in fracture(&m.mesh, k) {
+                        frags.push((ranges.len() as u32, c));
+                        ranges.push(super::mesh::MeshRange { first: prims.idx.len() as u32, count: mb.idx.len() as u32, base: prims.verts.len() as i32 });
+                        prims.verts.extend_from_slice(&mb.verts);
+                        prims.idx.extend_from_slice(&mb.idx);
+                    }
+                    lib.fragments.insert(m.name.clone(), frags);
+                }
             }
             if m.skinned() {
                 lib.skin_id.insert(m.name.clone(), skin_n);
@@ -432,6 +517,22 @@ impl Library {
         v.into_iter().map(|(_, m)| (m.skin_verts.clone(), m.skin_idx.clone())).collect()
     }
 }
+#[cfg(test)]
+mod fracture_tests {
+    /// Breaking a prop keeps every triangle, in roughly the asked number of pieces.
+    #[test]
+    fn breakables_fracture_into_pieces() {
+        let all = super::load_all();
+        for (name, k) in super::BREAKABLE {
+            let m = all.iter().find(|m| m.name == name).unwrap_or_else(|| panic!("missing breakable {name}"));
+            let frags = super::fracture(&m.mesh, k);
+            let tris: usize = frags.iter().map(|f| f.0.idx.len()).sum();
+            assert_eq!(tris, m.mesh.idx.len(), "{name}: triangles lost");
+            assert!(frags.len() >= 2.min(k) && frags.len() <= k, "{name}: {} pieces", frags.len());
+        }
+    }
+}
+
 #[cfg(test)]
 mod infected_tests {
     /// The Blender-built infected keep their base model's skeleton and clips exactly (clips are

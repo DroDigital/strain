@@ -238,6 +238,13 @@ impl Game {
         }
         let body = *self.w.body.get(e).unwrap();
         let team = self.w.actor.get(e).unwrap().team;
+        // swings smash what they connect with: brutes and charged heavies break barricades
+        {
+            let fwd = yaw_dir(body.yaw);
+            let strike = body.pos + fwd * mv.reach * 0.75 + Vec3::Y * 0.8;
+            let force = if e == self.player { if a.heavy { 2.6 + a.charge * 2.0 } else { 1.4 } } else { mv.dmg * 2.0 };
+            self.shatter_near(strike, mv.reach * 0.45, force, fwd);
+        }
         let is_boss = self.w.foe.get(e).map(|f| f.boss.is_some()).unwrap_or(false);
         let scale = if is_boss { 1.0 } else { self.w.rig.get(e).map(|r| r.plan.scale).unwrap_or(1.0) };
         let grasp = self.w.foe.get(e).map(|f| f.affixes.contains(&AffixKind::Grasping)).unwrap_or(false);
@@ -873,6 +880,7 @@ impl Game {
 
     /// Damage everything hostile to `team` in a radius.
     pub fn aoe(&mut self, p: Vec3, r: f32, dmg: f32, poise: f32, team: Team, src: Option<Entity>, kind: DmgKind) -> u32 {
+        self.shatter_near(p, r, 2.0 + poise * 0.05, Vec3::ZERO);
         self.debris_impulse(p, r * 1.3, 4.0 + poise * 0.08);
         let mut hits = Vec::new();
         self.hash.query(p, r, |id, bp, _| hits.push((id, bp)));
@@ -1207,6 +1215,7 @@ impl Game {
                         self.parts.burst(Fx::Fire, p + Vec3::Y * 0.3, Vec3::Y, 40, z.radius * 0.5);
                         self.parts.burst(Fx::Flash, p + Vec3::Y, Vec3::ZERO, 1, z.radius * 0.6);
                         self.parts.burst(Fx::Smoke, p, Vec3::ZERO, 8, 1.0);
+                        self.shatter_near(p, z.radius * 1.2, 6.0, Vec3::ZERO);
                         self.debris_impulse(p, z.radius * 1.8, 9.0);
                         self.audio.play_at(Sfx::Explode, p, 0.9, 0.9);
                         self.lights_temp.push((p + Vec3::Y * 2.0, Vec3::new(6.0, 3.0, 1.0), z.radius * 3.0, 0.25));

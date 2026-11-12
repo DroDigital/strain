@@ -49,6 +49,8 @@ pub enum Fx {
     Gore,
     /// a fine red haze where a blow lands
     BloodMist,
+    /// spray from a burst water main
+    Water,
 }
 
 pub struct Particles {
@@ -98,6 +100,7 @@ impl Particles {
                     let c = [rf(r, 0.22, 0.35), rf(r, 0.03, 0.06), rf(r, 0.03, 0.05), 1.0];
                     P { vel: (dir * 1.2 + rs) * rf(r, 1.5, 4.5) * power + Vec3::Y * rf(r, 1.0, 3.0), max: rf(r, 0.9, 1.8), size: rf(r, 0.025, 0.07), size_end: 0.015, col: c, col_end: [c[0] * 0.6, c[1] * 0.6, c[2] * 0.6, 0.0], kind: 1.0, grav: 11.0, drag: 0.2, floor: true, stain: r.f32() < 0.3, ..base }
                 }
+                Fx::Water => P { pos: pos + rs * 0.05, vel: (dir + rs * 0.25) * rf(r, 2.5, 4.5) * power, max: rf(r, 0.8, 1.6), size: rf(r, 0.015, 0.04), size_end: 0.05, col: [0.75, 0.8, 0.85, 0.55], col_end: [0.7, 0.75, 0.8, 0.0], kind: 1.0, grav: 9.81, drag: 0.3, stretch: 3.0, floor: true, ..base },
                 Fx::BloodMist => P { pos: pos + rs * 0.1, vel: (dir * 1.4 + rs * 0.6) * power, max: rf(r, 0.35, 0.7), size: rf(r, 0.12, 0.22), size_end: rf(r, 0.5, 0.8), col: [0.3, 0.02, 0.02, 0.32], col_end: [0.22, 0.02, 0.02, 0.0], kind: 2.0, drag: 4.0, ..base },
                 Fx::Sparks => P { vel: (dir + rs * 0.9) * rf(r, 3.0, 9.0) * power, max: rf(r, 0.15, 0.45), size: 0.03, size_end: 0.01, col: [3.0, 2.2, 0.8, 1.0], col_end: [2.0, 0.5, 0.1, 0.0], kind: 3.0, grav: 9.0, add: 1.0, stretch: 4.0, ..base },
                 Fx::Bone => P { vel: (dir + rs) * rf(r, 2.0, 5.0) * power + Vec3::Y * 2.0, max: rf(r, 0.5, 1.0), size: rf(r, 0.03, 0.07), size_end: 0.03, col: [0.9, 0.85, 0.7, 1.0], col_end: [0.8, 0.75, 0.6, 0.0], kind: 1.0, grav: 14.0, floor: true, ..base },

@@ -84,7 +84,8 @@ mod tests {
         assert!(FILES.len() > 100, "assets missing: {}", FILES.len());
         for p in list("textures/") {
             let im = image(p).unwrap_or_else(|| panic!("bad png {p}"));
-            assert_eq!((im.w, im.h), (256, 256), "{p}");
+            let t = crate::render::textures::TEX;
+            assert_eq!((im.w, im.h), (t, t), "{p}");
         }
         assert!(image("models/atlas.png").is_some());
         for p in list("audio/") {

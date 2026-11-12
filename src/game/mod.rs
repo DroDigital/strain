@@ -205,6 +205,8 @@ pub struct Game {
     pub gore_force: bool,
 
     pub debris: Vec<debris::Debris>,
+    /// burst fire hydrants: (where, seconds left)
+    pub hydrants: Vec<(Vec3, f32)>,
     pub bug_debris: Vec<Vec3>,
     pub build_start: std::time::Instant,
     pub build_ms: f32,
@@ -314,6 +316,7 @@ impl Game {
             bug_yaw: 0.0,
             decals: Vec::new(),
             gibs: Vec::new(),
+            hydrants: Vec::new(),
             bleeds: Vec::new(),
             cut_ctx: None,
             gore_force: false,
