@@ -32,7 +32,7 @@ pub struct GfxSettings {
 }
 impl Default for GfxSettings {
     fn default() -> Self {
-        GfxSettings { internal_height: 480, shadow_quality: 2, fog_quality: 1, particle_density: 1, vsync: true, window_mode: WindowMode::Windowed }
+        GfxSettings { internal_height: 540, shadow_quality: 2, fog_quality: 1, particle_density: 1, vsync: true, window_mode: WindowMode::Windowed }
     }
 }
 impl GfxSettings {
@@ -952,7 +952,7 @@ impl Renderer {
         g.fog_par = [e.fog_height, steps, 110.0, e.light_scatter];
         g.screen = [t.w as f32, t.h as f32, 1.0, 0.0];
         g.grade = e.grade.extend(e.saturation).into();
-        g.fx = [e.levels, e.dither, e.vignette, e.strain];
+        g.fx = [e.levels * 2.0, e.dither, e.vignette, e.strain];
         let nl = f.lights.len().min(32);
         let nd = f.distorts.len().min(8);
         g.counts = [nl as f32, nd as f32, e.fade, e.flash];

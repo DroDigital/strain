@@ -140,6 +140,17 @@ impl Game {
                     if a.active() {
                         self.resolve_melee(e);
                     }
+                    // swing trails behind the weapon during the strike
+                    if a.phase() > 0.85 && a.phase() < 2.15 && !matches!(mv.swing, Swing::Shoot | Swing::Spit) {
+                        if let Some(r) = self.w.rig.get(e) {
+                            let (tip, hand) = (r.weapon_tip, r.hand_r);
+                            let heavy = a.heavy || mv.dmg > 1.25;
+                            for k in 0..4 {
+                                let q = hand.lerp(tip, 0.4 + k as f32 * 0.2);
+                                self.parts.burst(Fx::Trail, q, Vec3::ZERO, 1, if heavy { 1.5 } else { 1.0 });
+                            }
+                        }
+                    }
                 }
                 ActKind::Rupture => {
                     if prev < 0.45 && a.t >= 0.45 {
@@ -608,6 +619,9 @@ impl Game {
         if !matches!(kind, DmgKind::Rot | DmgKind::Fire) || amount > 6.0 {
             self.parts.burst(blood, c, dir, (3.0 + amount * 0.25).min(18.0) as u32, 1.0);
             let heavy = matches!(kind, DmgKind::Heavy | DmgKind::Rupture) || amount > 30.0;
+            if heavy {
+                self.lights_temp.push((c, Vec3::new(2.2, 1.6, 1.2), 5.0, 0.07));
+            }
             self.audio.play_at(if heavy { Sfx::HitHeavy } else { Sfx::HitFlesh }, c, 0.7, rf(&mut self.rng, 0.85, 1.15));
             if matches!(kind, DmgKind::Melee | DmgKind::Heavy) {
                 self.parts.burst(Fx::Sparks, c, dir, 3, 0.6);
@@ -808,6 +822,7 @@ impl Game {
 
     /// Damage everything hostile to `team` in a radius.
     pub fn aoe(&mut self, p: Vec3, r: f32, dmg: f32, poise: f32, team: Team, src: Option<Entity>, kind: DmgKind) -> u32 {
+        self.debris_impulse(p, r * 1.3, 4.0 + poise * 0.08);
         let mut hits = Vec::new();
         self.hash.query(p, r, |id, bp, _| hits.push((id, bp)));
         let mut n = 0;
@@ -1141,6 +1156,7 @@ impl Game {
                         self.parts.burst(Fx::Fire, p + Vec3::Y * 0.3, Vec3::Y, 40, z.radius * 0.5);
                         self.parts.burst(Fx::Flash, p + Vec3::Y, Vec3::ZERO, 1, z.radius * 0.6);
                         self.parts.burst(Fx::Smoke, p, Vec3::ZERO, 8, 1.0);
+                        self.debris_impulse(p, z.radius * 1.8, 9.0);
                         self.audio.play_at(Sfx::Explode, p, 0.9, 0.9);
                         self.lights_temp.push((p + Vec3::Y * 2.0, Vec3::new(6.0, 3.0, 1.0), z.radius * 3.0, 0.25));
                         self.shake(0.5);

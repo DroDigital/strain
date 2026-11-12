@@ -41,6 +41,8 @@ pub enum Fx {
     Biomass,
     Strain,
     Shock,
+    /// a short-lived streak left behind a swinging weapon
+    Trail,
 }
 
 pub struct Particles {
@@ -91,6 +93,7 @@ impl Particles {
                 Fx::Flash => P { max: 0.12 * power.max(0.5), size: 0.6 * power, size_end: 1.6 * power, col: [4.0, 3.6, 3.0, 0.9], col_end: [3.0, 2.0, 1.0, 0.0], add: 1.0, ..base },
                 Fx::Biomass => P { pos: pos + rs * 0.3, vel: rs * 1.5 + Vec3::Y * 2.0, max: rf(r, 0.5, 0.9), size: 0.05, size_end: 0.0, col: [2.5, 0.6, 1.2, 1.0], col_end: [1.2, 0.2, 0.8, 0.0], add: 1.0, drag: 2.0, ..base },
                 Fx::Strain => P { pos: pos + Vec3::new(rs.x * 0.4, rf(r, 0.2, 1.7), rs.z * 0.4), vel: rs * 0.6 + Vec3::Y, max: rf(r, 0.3, 0.7), size: 0.04, size_end: 0.0, col: [2.6, 0.5, 3.0, 1.0], col_end: [1.0, 0.1, 1.5, 0.0], kind: 1.0, add: 1.0, ..base },
+                Fx::Trail => P { pos: pos + rs * 0.02, vel: dir * 0.3, max: 0.16, size: 0.06 * power.max(0.5), size_end: 0.01, col: [1.6, 1.5, 1.4, 0.55], col_end: [0.8, 0.6, 0.6, 0.0], kind: 0.0, add: 1.0, ..base },
                 Fx::Shock => {
                     let a = rf(r, 0.0, 6.283);
                     let d = Vec3::new(a.cos(), 0.0, a.sin());

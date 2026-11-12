@@ -213,7 +213,9 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     }
     let luma = dot(tex.rgb, vec3<f32>(0.3, 0.5, 0.2));
     let emis = albedo * in.color.a * 4.0 * smoothstep(0.25, 0.7, luma + in.color.a * 0.2);
-    var col = albedo * light + emis + spec * (puddle * 0.9 + wet * 0.08);
+    // rim light keeps silhouettes readable in fog and darkness
+    let rim = pow(1.0 - max(dot(n, V), 0.0), 3.0);
+    var col = albedo * light + emis + spec * (puddle * 0.9 + wet * 0.08) + albedo * rim * (G.fog_col.rgb * 1.5 + G.ambient.rgb * 0.6);
     col = mix(col, vec3<f32>(3.0, 3.0, 3.0), in.par.y);
     return vec4<f32>(col, 1.0);
 }

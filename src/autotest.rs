@@ -158,6 +158,22 @@ impl AutoTest {
                 Wait(300),
                 Do(|g| eprintln!("autotest: player hp after 10 s of hostile soldiers: {:.0}/2000", g.w.actor.get(g.player).unwrap().hp)),
                 Shot("soldiers"),
+                Do(|g| {
+                    let p = g.ppos();
+                    let near: Vec<Vec3> = g.debris.iter().filter(|d| (d.pos - p).length() < 12.0).map(|d| d.pos).collect();
+                    g.bug_debris = near.clone();
+                    eprintln!("autotest: debris in city {}, within 12 m {}", g.debris.len(), near.len());
+                    if let Some(q) = near.first() {
+                        let mut z = g.make_zone(*q, crate::game::comp::ZoneKind::Blast, 3.0, 0.0, 0.5, crate::game::comp::Team::Player, None);
+                        z.delay = 0.1;
+                        g.add_zone(*q, z);
+                    }
+                }),
+                Wait(40),
+                Do(|g| {
+                    let moved = g.debris.iter().filter(|d| g.bug_debris.iter().any(|q| (*q - d.pos).length() > 0.3 && (*q - d.pos).length() < 15.0)).count();
+                    eprintln!("autotest: debris moved by the blast: {moved}");
+                }),
                 Do(|g| { g.cam.pitch = 0.05; }),
                 Wait(10),
                 Shot("floor"),

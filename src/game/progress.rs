@@ -440,6 +440,7 @@ impl Game {
         self.pl.lock = None;
         self.mimic_plans.clear();
         self.cache_origin.clear();
+        self.debris.clear();
         self.parts.clear();
     }
 

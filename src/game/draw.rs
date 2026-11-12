@@ -315,6 +315,9 @@ impl Game {
         // ---- kit models placed by world generation
         for c in self.area.chunks.values() {
             for (name, m, tint) in &c.props {
+                if crate::game::debris::LOOSE.contains(name) {
+                    continue;
+                }
                 let p = m.w_axis.truncate();
                 if (p - cam).length() > 120.0 {
                     continue;
@@ -326,6 +329,7 @@ impl Game {
                 }
             }
         }
+        self.draw_debris(cam);
         // blood pooled where things died
         for (id, m, life) in &self.decals {
             let mut i = Instance::new(*m, [0.55, 0.05, 0.06, 0.0], -1.0);

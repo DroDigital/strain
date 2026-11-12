@@ -5,6 +5,7 @@ pub mod camera;
 pub mod combat;
 pub mod comp;
 pub mod cutscene;
+pub mod debris;
 pub mod draw;
 pub mod life;
 pub mod loot;
@@ -193,6 +194,8 @@ pub struct Game {
     pub bug_yaw: f32,
     /// ground decals: (model id, transform, seconds left)
     pub decals: Vec<(u32, glam::Mat4, f32)>,
+    pub debris: Vec<debris::Debris>,
+    pub bug_debris: Vec<Vec3>,
     pub build_start: std::time::Instant,
     pub build_ms: f32,
     pub prof_acc: (f32, f32, u32),
@@ -300,6 +303,8 @@ impl Game {
             bug_steps: 0,
             bug_yaw: 0.0,
             decals: Vec::new(),
+            debris: Vec::new(),
+            bug_debris: Vec::new(),
             build_start: std::time::Instant::now(),
             build_ms: 0.0,
             t,
@@ -790,6 +795,7 @@ impl Game {
         self.zones_tick(dt);
         self.status_tick(dt);
         self.pickups_tick(dt);
+        self.debris_tick(dt);
         self.echo_tick(dt);
         self.progress_tick();
         self.life_tick(dt);

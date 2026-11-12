@@ -625,9 +625,11 @@ impl Game {
             ents.push(self.add_zone(p, z));
         }
         self.chunk_ents.insert(key, ents);
+        self.spawn_debris(key);
     }
 
     pub fn depopulate(&mut self, key: (i32, i32)) {
+        self.despawn_debris(key);
         let pp = self.ppos();
         if let Some(ents) = self.chunk_ents.remove(&key) {
             for e in ents {

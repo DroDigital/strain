@@ -6,6 +6,7 @@ pub fn get(path: &str) -> Option<&'static [u8]> {
 }
 
 /// All embedded paths starting with `prefix`, sorted.
+#[cfg(test)]
 pub fn list(prefix: &str) -> Vec<&'static str> {
     FILES.iter().filter(|f| f.0.starts_with(prefix)).map(|f| f.0).collect()
 }

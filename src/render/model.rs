@@ -418,9 +418,6 @@ impl Library {
         v.sort_by_key(|x| x.0);
         v.into_iter().map(|(_, m)| (m.skin_verts.clone(), m.skin_idx.clone())).collect()
     }
-    pub fn get(&self, name: &str) -> Option<&Model> {
-        self.index.get(name).map(|&i| &self.models[i])
-    }
 }
 #[cfg(test)]
 mod size_tests {

@@ -6,9 +6,19 @@ consume: **compatible**. Soulslike melee, roguelike mutation builds, ARPG loot. 
 melee and magic only.
 
 Everything is written by hand in Rust on top of a few low-level crates (wgpu, winit, gilrs, cpal,
-glam, bytemuck, serde/ron, directories, fastrand). There are **no asset files**: every mesh,
-texture, animation, sound effect and piece of music is generated in code while the loading screen
-runs.
+glam, bytemuck, serde/ron, directories, fastrand, plus gltf and png for reading assets). The engine
+— renderer, skinning, animation blending, ECS, physics, AI, mixer — is custom; the art and sound
+combine CC0 (public domain) assets with procedural generation:
+
+- **Characters, zombies, weapons, vehicles and street props**: Quaternius *Zombie Apocalypse Kit*
+  (rigged, animated glTF), with Lovecraftian growths, mutated limbs and heads built procedurally
+  and attached to the skeletons.
+- **Surfaces**: ambientCG photo textures, combined with procedural windows, signs, veins and glow.
+- **Sound effects and ambience**: recorded CC0 packs from OpenGameArt, several variants per sound.
+- **Music**, UI sounds, sirens and radio: synthesised in real time.
+
+All third-party assets are listed in [`assets/CREDITS.md`](assets/CREDITS.md) and embedded into the
+binary at compile time, so the game is still a single executable.
 
 ## Running
 
@@ -87,10 +97,16 @@ F3 shows the frame rate, F11 toggles borderless fullscreen, F12 saves a screensh
   in the street, helicopters, a day-night cycle, rain and spore storms, notes and graffiti,
   abandoned checkpoints, and short in-engine cutscenes for the opening, every boss and the ending.
 
+## Assets
+
+`python3 tools/fetch_assets.py` reproduces `assets/` from the original sources (needs Pillow and
+ffmpeg); the processed files are committed, so building never needs the network. Add a source by
+extending the tables at the top of the script.
+
 ## Look
 
 Pseudo-retro with modern technique: low-poly geometry, 64 px nearest-filtered textures, vertex
-snapping, subtle affine texture wobble, a fixed 480p internal resolution upscaled to the window,
+snapping, a fixed internal resolution (540p by default) upscaled to the window,
 ordered dithering and a reduced palette per district — combined with volumetric fog and light
 shafts, a sun shadow map, a shadow-casting key point light, GPU-instanced particles, bloom,
 screen-space distortion for rifts and magic, procedural animation (two-bone IK with planted feet,
@@ -105,7 +121,9 @@ windowed / borderless / fullscreen.
 | --- | --- |
 | `render/` | wgpu renderer, WGSL shaders, procedural textures and primitive meshes |
 | `world/` | districts, building kit, chunk streaming, rift dungeons |
-| `anim.rs` | modular body plans, IK, verlet chains, swing curves |
+| `anim.rs` | skinned-character controller (clip selection, crossfades, attack sync), procedural growths, IK, verlet chains |
+| `render/model.rs` | glTF loading, skeletons, clip sampling and retargeting |
+| `assets.rs`, `build.rs` | embedded asset table, PNG and WAV decoding |
 | `game/combat.rs` | action phases, melee resolution, damage pipeline, projectiles, zones |
 | `game/ai.rs` | perception, steering, archetypes, affixes, soldiers, civilians, bosses |
 | `game/spawn.rs` | procedural enemy assembly, spawning, drops |
@@ -114,7 +132,7 @@ windowed / borderless / fullscreen.
 | `game/loot.rs` | items, rolls, uniques, grid inventory |
 | `game/ui.rs` | HUD and menus |
 | `game/life.rs`, `game/cutscene.rs` | weather, day-night, helicopters, ambience, cutscenes |
-| `audio.rs` | hand-written mixer, synthesised sound bank, adaptive generative music |
+| `audio.rs` | hand-written mixer, recorded sound variants, ambience loops, synthesised UI/sirens, adaptive generative music |
 | `ecs.rs`, `physics.rs` | entity-component store, collision, spatial hash |
 | `data/*.ron` | weapons, spells, items, uniques, mutations, enemy parts, affixes, bosses, text |
 
@@ -125,6 +143,9 @@ changes. `cargo test` validates the tables and the content minimums.
 
 `STRAIN_AUTOTEST=<scenario>` drives the real game with scripted input and saves screenshots to
 `STRAIN_SHOT_DIR`: `tour` (districts, combat, menus, every rift, a boss, death and respawn),
+`look` (every character model and archetype lined up), `bugs` (regression checks for fixed bugs),
+`roam` (walks every district checking for stuck or embedded states), `duel` (a combat bot fights a
+street pack and the first boss),
 `spells` (all 18 spells), `stress` (every mutation and unique, every archetype at every stage),
 `progress` (Husk reclaim and rising, vendor, stash, all bosses, ending, save and continue) and
 `title` / `opening`. `STRAIN_PROFILE=1` prints CPU timings.
