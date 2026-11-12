@@ -14,6 +14,8 @@ pub enum Step {
     Log(&'static str),
     /// let a simple combat bot play for n frames
     Bot(u32),
+    /// roam the streets for n frames, checking for stuck/embedded/NaN states
+    Roam(u32),
 }
 
 pub struct AutoTest {
@@ -23,6 +25,18 @@ pub struct AutoTest {
     dir: String,
     held: Option<Action>,
     frames: u64,
+    roam: RoamStats,
+}
+
+#[derive(Default)]
+pub struct RoamStats {
+    last: Vec3,
+    streak: u32,
+    max_streak: u32,
+    stuck_events: u32,
+    embedded: u32,
+    nan: u32,
+    teleports: u32,
 }
 
 fn teleport(g: &mut Game, p: Vec3) {
@@ -36,6 +50,18 @@ impl AutoTest {
         use Step::*;
         let steps: Vec<Step> = match name.as_str() {
             "title" => vec![Wait(40), Shot("title")],
+            "roam" => vec![
+                Wait(10),
+                Do(|g| {
+                    std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                    g.new_game();
+                    let pe = g.player;
+                    if let Some(a) = g.w.actor.get_mut(pe) { a.max_hp = 1e6; a.hp = 1e6; }
+                }),
+                Roam(3600),
+                Shot("roam_end"),
+                Log("roam done"),
+            ],
             "bugs" => vec![
                 Wait(10),
                 Do(|g| {
@@ -459,7 +485,7 @@ impl AutoTest {
                 Log("autotest complete"),
             ],
         };
-        Some(AutoTest { steps, i: 0, t: 0, dir, held: None, frames: 0 })
+        Some(AutoTest { steps, i: 0, t: 0, dir, held: None, frames: 0, roam: RoamStats::default() })
     }
 
     /// Advance the script by one frame. Returns true when finished.
@@ -474,7 +500,7 @@ impl AutoTest {
         let Some(s) = self.steps.get(self.i) else { return true };
         let mut next = true;
         for a in [Action::MoveF, Action::MoveB, Action::MoveL, Action::MoveR, Action::Block, Action::Light, Action::Dodge, Action::Heal, Action::LockOn, Action::UiAccept] {
-            if !matches!(s, Step::Bot(_)) {
+            if !matches!(s, Step::Bot(_) | Step::Roam(_)) {
                 break;
             }
             input.inject(a, false);
@@ -503,6 +529,14 @@ impl AutoTest {
             }
             Step::Do(f) => f(g),
             Step::Log(m) => eprintln!("autotest: {m} after {} frames", self.frames),
+            Step::Roam(n) => {
+                roam(g, input, self.t, &mut self.roam);
+                self.t += 1;
+                next = self.t >= *n;
+                if next {
+                    eprintln!("autotest: roam: teleports {} stuck events {} embedded frames {} max stuck streak {} nan {} panics none, deaths {}", self.roam.teleports, self.roam.stuck_events, self.roam.embedded, self.roam.max_streak, self.roam.nan, g.prof.deaths);
+                }
+            }
             Step::Bot(n) => {
                 bot(g, input, self.t);
                 self.t += 1;
@@ -606,4 +640,60 @@ fn bot(g: &mut Game, input: &mut Input, t: u32) {
         }
     }
     let _ = t;
+}
+
+fn roam(g: &mut Game, input: &mut Input, t: u32, st: &mut RoamStats) {
+    use crate::physics::Statics;
+    if g.screen != Screen::None {
+        input.inject(Action::UiAccept, true);
+        if g.screen == Screen::Dead && g.dead_t > 3.0 {
+            g.respawn();
+        }
+        g.screen = if g.screen == Screen::LevelUp || g.screen == Screen::Dead { g.screen } else { Screen::None };
+        return;
+    }
+    // new random street position every 15 s, rotating through districts
+    if t % 450 == 0 {
+        let d = (t / 450) as usize % 6;
+        let mut r = crate::util::Rng::with_seed(t as u64);
+        let local = (r.i32(0..6), r.i32(0..6));
+        let c = crate::world::chunk_center(d, local);
+        let p = c + Vec3::new(-24.5, 0.0, r.f32() * 40.0 - 20.0);
+        g.rebuild_city(p);
+        st.teleports += 1;
+        st.last = g.ppos();
+        st.streak = 0;
+        return;
+    }
+    if t % 90 == 0 {
+        g.cam.yaw += 1.3 + (t as f32 * 0.37).sin();
+    }
+    input.inject(Action::MoveF, true);
+    if t % 40 == 0 {
+        input.inject(Action::Dodge, true);
+    }
+    let p = g.ppos();
+    if !p.is_finite() {
+        st.nan += 1;
+    }
+    let b = g.player_body();
+    if g.area.blocked(p, b.radius * 0.6) {
+        st.embedded += 1;
+        if st.embedded % 30 == 1 {
+            eprintln!("autotest: roam: embedded in geometry at {:?}", p);
+        }
+    }
+    let moved = (p - st.last).length();
+    st.last = p;
+    if moved < 0.01 && g.w.actor.get(g.player).map(|a| a.act.kind == crate::game::comp::ActKind::Idle).unwrap_or(false) {
+        st.streak += 1;
+        if st.streak == 60 {
+            st.stuck_events += 1;
+            // turn to get free, like a player would
+            g.cam.yaw += 2.0;
+        }
+        st.max_streak = st.max_streak.max(st.streak);
+    } else {
+        st.streak = 0;
+    }
 }

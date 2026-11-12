@@ -621,7 +621,10 @@ impl Game {
         }
         match ai.target {
             Some(t) => {
-                let tb = *self.w.body.get(t).unwrap();
+                let Some(tb) = self.w.body.get(t).copied() else {
+                    self.w.ai.get_mut(e).unwrap().target = None;
+                    return;
+                };
                 let to = flat(tb.pos - body.pos);
                 let dist = to.length();
                 let dirn = to.normalize_or_zero();

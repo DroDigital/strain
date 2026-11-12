@@ -754,6 +754,7 @@ impl Game {
             a.rally = 1.0;
             a.glow = (a.glow - dt * 2.0).max(0.0);
         }
+        self.sanitize_handles();
         self.rebuild_hash();
         self.player_tick(dt);
         self.ai_tick(dt);
@@ -775,6 +776,44 @@ impl Game {
         }
         self.w.flush();
         self.noises.clear();
+    }
+
+    /// Drop stored entity handles whose entity has been despawned (ids are reused).
+    fn sanitize_handles(&mut self) {
+        let alive = |w: &World, e: Option<Entity>| e.filter(|e| w.alive(*e));
+        let ids: Vec<u32> = self.w.ai.ids().collect();
+        for id in ids {
+            let e = self.w.ent(id);
+            let t = self.w.ai.get(e).and_then(|a| a.target);
+            if t.is_some() && alive(&self.w, t).is_none() {
+                self.w.ai.get_mut(e).unwrap().target = None;
+            }
+        }
+        let ids: Vec<u32> = self.w.proj.ids().collect();
+        for id in ids {
+            let e = self.w.ent(id);
+            let (h, o) = self.w.proj.get(e).map(|p| (p.homing, p.owner)).unwrap();
+            let (h, o) = (alive(&self.w, h), alive(&self.w, o));
+            let p = self.w.proj.get_mut(e).unwrap();
+            p.homing = h;
+            p.owner = o;
+        }
+        let ids: Vec<u32> = self.w.zone.ids().collect();
+        for id in ids {
+            let e = self.w.ent(id);
+            let o = self.w.zone.get(e).and_then(|z| z.owner);
+            let o = alive(&self.w, o);
+            self.w.zone.get_mut(e).unwrap().owner = o;
+        }
+        self.pl.lock = alive(&self.w, self.pl.lock);
+        self.boss = alive(&self.w, self.boss);
+        if let Some((e, _)) = self.pl.last_hit_target {
+            if !self.w.alive(e) {
+                self.pl.last_hit_target = None;
+            }
+        }
+        let w = &self.w;
+        self.speech.retain(|s| w.alive(s.0));
     }
 
     fn rebuild_hash(&mut self) {
