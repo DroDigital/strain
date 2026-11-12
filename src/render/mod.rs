@@ -61,6 +61,8 @@ struct Globals {
     light_col: [[f32; 4]; 32],
     distort: [[f32; 4]; 8],
     distort2: [[f32; 4]; 8],
+    key_vp: [[f32; 16]; 6],
+    key: [f32; 4],
 }
 
 #[repr(C)]
@@ -184,6 +186,9 @@ pub struct Frame<'a> {
     pub distorts: &'a [Distort],
     pub particles: &'a [ParticleInst],
     pub ui: &'a [UiVertex],
+    /// shadow-casting point light (position, radius); must be lights[0]
+    pub key: Option<(Vec3, f32)>,
+    pub key_statics: Vec<&'a StaticMesh>,
 }
 
 struct Targets {
@@ -219,6 +224,10 @@ pub struct Renderer {
     samp_shadow: wgpu::Sampler,
     shadow_view: wgpu::TextureView,
     shadow_size: u32,
+    key_view: wgpu::TextureView,
+    key_face_buf: wgpu::Buffer,
+    key_face_bg: wgpu::BindGroup,
+    p_key: wgpu::RenderPipeline,
     targets: Targets,
     p_scene: wgpu::RenderPipeline,
     p_shadow: wgpu::RenderPipeline,
@@ -248,6 +257,7 @@ pub struct Renderer {
 const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const LDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+const KEY_FACE: u32 = 512;
 
 fn tex_entry(binding: u32, ty: wgpu::BindingType) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::FRAGMENT, ty, count: None }
@@ -341,7 +351,7 @@ impl Renderer {
         use wgpu::TextureViewDimension as D;
         let l_scene = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene"),
-            entries: &[tex_entry(0, bt_tex(D::D2Array, false)), tex_entry(1, bt_samp(false)), tex_entry(2, bt_tex(D::D2, true)), tex_entry(3, bt_samp(true))],
+            entries: &[tex_entry(0, bt_tex(D::D2Array, false)), tex_entry(1, bt_samp(false)), tex_entry(2, bt_tex(D::D2, true)), tex_entry(3, bt_samp(true)), tex_entry(4, bt_tex(D::D2, true))],
         });
         let l_post = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("post"),
@@ -402,6 +412,35 @@ impl Renderer {
             fragment: None,
             multiview_mask: None,
             cache: None,
+        });
+        let l_kf = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("key face"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: wgpu::BufferSize::new(64) },
+                count: None,
+            }],
+        });
+        let pl_key = pl(&[Some(&l_g0), None, Some(&l_kf)]);
+        let vbl2 = wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Vertex>() as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &vattrs };
+        let ibl2 = wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Instance>() as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &iattrs };
+        let p_key = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("key shadow"),
+            layout: Some(&pl_key),
+            vertex: wgpu::VertexState { module: &sh_scene, entry_point: Some("vs_key"), compilation_options: Default::default(), buffers: &[Some(vbl2), Some(ibl2)] },
+            primitive: prim_state(false, false),
+            depth_stencil: depth_state(true, 2),
+            multisample: Default::default(),
+            fragment: None,
+            multiview_mask: None,
+            cache: None,
+        });
+        let key_face_buf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("key faces"), size: 256 * 6, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let key_face_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &l_kf,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &key_face_buf, offset: 0, size: wgpu::BufferSize::new(64) }) }],
         });
         let pattrs = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
         let premul = wgpu::BlendState {
@@ -503,6 +542,7 @@ impl Renderer {
 
         let shadow_size = Self::shadow_px(&settings);
         let (_, shadow_view) = make_tex(&device, shadow_size, shadow_size, DEPTH, "shadow");
+        let (_, key_view) = make_tex(&device, KEY_FACE * 3, KEY_FACE * 2, DEPTH, "key shadow");
 
         let globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
@@ -511,7 +551,7 @@ impl Renderer {
             mapped_at_creation: false,
         });
         let g0 = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &l_g0, entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals_buf.as_entire_binding() }] });
-        let g1_scene = Self::scene_bg(&device, &l_scene, &tex_view, &samp_nearest_rep, &shadow_view, &samp_shadow);
+        let g1_scene = Self::scene_bg(&device, &l_scene, &tex_view, &samp_nearest_rep, &shadow_view, &samp_shadow, &key_view);
 
         // UI atlas
         let ui_tex = device.create_texture_with_data(
@@ -565,6 +605,10 @@ impl Renderer {
             samp_shadow,
             shadow_view,
             shadow_size,
+            key_view,
+            key_face_buf,
+            key_face_bg,
+            p_key,
             targets,
             p_scene,
             p_shadow,
@@ -600,7 +644,7 @@ impl Renderer {
         }
     }
 
-    fn scene_bg(device: &wgpu::Device, l: &wgpu::BindGroupLayout, tex: &wgpu::TextureView, s: &wgpu::Sampler, shadow: &wgpu::TextureView, ss: &wgpu::Sampler) -> wgpu::BindGroup {
+    fn scene_bg(device: &wgpu::Device, l: &wgpu::BindGroupLayout, tex: &wgpu::TextureView, s: &wgpu::Sampler, shadow: &wgpu::TextureView, ss: &wgpu::Sampler, key: &wgpu::TextureView) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: l,
@@ -609,6 +653,7 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(s) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(shadow) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(ss) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(key) },
             ],
         })
     }
@@ -682,7 +727,7 @@ impl Renderer {
         if old.shadow_quality != s.shadow_quality {
             self.shadow_size = Self::shadow_px(s);
             self.shadow_view = make_tex(&self.device, self.shadow_size, self.shadow_size, DEPTH, "shadow").1;
-            self.g1_scene = Self::scene_bg(&self.device, &self.l_scene, &self.tex_view, &self.samp_nearest_rep, &self.shadow_view, &self.samp_shadow);
+            self.g1_scene = Self::scene_bg(&self.device, &self.l_scene, &self.tex_view, &self.samp_nearest_rep, &self.shadow_view, &self.samp_shadow, &self.key_view);
         }
         self.rebuild_targets();
     }
@@ -789,6 +834,22 @@ impl Renderer {
             g.distort[i] = d.pos.extend(d.radius).into();
             g.distort2[i] = [d.strength, d.swirl, 0.0, 0.0];
         }
+        let key_on = self.settings.shadow_quality >= 2 && f.key.is_some() && !f.lights.is_empty();
+        let mut faces = [Mat4::IDENTITY; 6];
+        if let (true, Some((kp, kr))) = (key_on, f.key) {
+            let kproj = crate::util::perspective(std::f32::consts::FRAC_PI_2, 1.0, 0.15, kr.max(1.0));
+            let dirs = [(Vec3::X, Vec3::Y), (Vec3::NEG_X, Vec3::Y), (Vec3::Y, Vec3::Z), (Vec3::NEG_Y, Vec3::Z), (Vec3::Z, Vec3::Y), (Vec3::NEG_Z, Vec3::Y)];
+            for (i, (d, up)) in dirs.iter().enumerate() {
+                faces[i] = kproj * crate::util::look_at(kp, kp + *d, *up);
+                g.key_vp[i] = faces[i].to_cols_array();
+            }
+            g.key = kp.extend(1.0).into();
+            let mut fb = vec![0u8; 256 * 6];
+            for i in 0..6 {
+                fb[i * 256..i * 256 + 64].copy_from_slice(bytemuck::bytes_of(&faces[i].to_cols_array()));
+            }
+            self.queue.write_buffer(&self.key_face_buf, 0, &fb);
+        }
         self.queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&g));
 
         // ---- instance upload (slot 0 is the identity instance for static geometry)
@@ -838,6 +899,18 @@ impl Renderer {
             rp.set_pipeline(&self.p_shadow);
             rp.set_bind_group(0, &self.g0, &[]);
             draw_geo(&mut rp, &f.shadow_statics);
+        }
+        if key_on {
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: Some("key shadow"), color_attachments: &[], depth_stencil_attachment: depth_att(&self.key_view), ..Default::default() });
+            rp.set_pipeline(&self.p_key);
+            rp.set_bind_group(0, &self.g0, &[]);
+            for face in 0..6u32 {
+                let (x, y) = ((face % 3) * KEY_FACE, (face / 3) * KEY_FACE);
+                rp.set_viewport(x as f32, y as f32, KEY_FACE as f32, KEY_FACE as f32, 0.0, 1.0);
+                rp.set_scissor_rect(x, y, KEY_FACE, KEY_FACE);
+                rp.set_bind_group(2, &self.key_face_bg, &[face * 256]);
+                draw_geo(&mut rp, &f.key_statics);
+            }
         }
         fn color_att(v: &wgpu::TextureView, clear: Option<Vec3>) -> Option<wgpu::RenderPassColorAttachment<'_>> {
             Some(wgpu::RenderPassColorAttachment {

@@ -185,6 +185,12 @@ pub struct Game {
     pub rebind_armed: bool,
     pub load_progress: f32,
     pub load_label: String,
+    pub profile: bool,
+    pub spell_test: usize,
+    pub pending_ending: f32,
+    pub build_start: std::time::Instant,
+    pub build_ms: f32,
+    pub prof_acc: (f32, f32, u32),
 }
 
 impl Game {
@@ -281,6 +287,12 @@ impl Game {
             rebind_armed: false,
             load_progress: 0.0,
             load_label: String::new(),
+            profile: std::env::var("STRAIN_PROFILE").is_ok(),
+            prof_acc: (0.0, 0.0, 0),
+            spell_test: 0,
+            pending_ending: 0.0,
+            build_start: std::time::Instant::now(),
+            build_ms: 0.0,
             t,
         };
         g.make_player();
@@ -495,13 +507,26 @@ impl Game {
             self.parts.density = self.settings.gfx.particle_scale();
             self.cam.fov = self.settings.fov;
         }
+        let t0 = std::time::Instant::now();
         self.update(dt);
+        let t1 = std::time::Instant::now();
         self.audio.listener = self.cam.eye;
         let f = crate::util::yaw_dir(self.cam.yaw);
         self.audio.listener_right = Vec3::new(-f.z, 0.0, f.x);
         self.audio.set_music(self.music_state());
         let alpha = self.alpha;
         self.draw(r, alpha, dt * self.time_scale());
+        let t2 = std::time::Instant::now();
+        if self.profile {
+            self.prof_acc.0 += (t1 - t0).as_secs_f32();
+            self.prof_acc.1 += (t2 - t1).as_secs_f32();
+            self.prof_acc.2 += 1;
+            if self.prof_acc.2 >= 120 {
+                let n = self.prof_acc.2 as f32;
+                eprintln!("profile: build {:.2} ms, update {:.2} ms, draw+submit {:.2} ms, entities {}, particles {}, instances {}", self.build_ms, self.prof_acc.0 / n * 1000.0, self.prof_acc.1 / n * 1000.0, self.w.body.ids().count(), self.parts.list.len(), self.inst.buckets.iter().map(|b| b.len()).sum::<usize>());
+                self.prof_acc = (0.0, 0.0, 0);
+            }
+        }
         input.end_frame();
     }
 
@@ -666,6 +691,16 @@ impl Game {
             }
         }
         self.alpha = (self.acc / DT).clamp(0.0, 1.0);
+        if self.pending_ending > 0.0 {
+            self.pending_ending -= dt;
+            if self.pending_ending <= 0.0 {
+                // back to the crater for the ending
+                let site = crate::world::rift_site(4);
+                self.return_pos = Some(site + Vec3::new(0.0, 0.0, 8.0));
+                self.exit_rift();
+                self.start_cutscene(cutscene::CutKind::Ending);
+            }
+        }
         if !paused {
             self.parts.update(dt * self.time_scale());
         }

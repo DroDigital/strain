@@ -101,6 +101,7 @@ impl Game {
     }
 
     pub fn draw(&mut self, r: &mut Renderer, alpha: f32, dt: f32) {
+        self.build_start = std::time::Instant::now();
         self.area.upload_pending(r, 4);
         let aspect = r.aspect();
         let view = self.cam.view();
@@ -204,7 +205,7 @@ impl Game {
                     self.inst.push(Prim::Cube as u32, inst(trs(p + Vec3::Y * 0.12, Quat::from_rotation_y(t * 1.5 + id as f32), Vec3::new(0.18 * w as f32, 0.12, 0.18 * h as f32)), Tex::Metal, c, 0.6));
                     let tall = 2.0 + it.rarity as u8 as f32 * 1.6;
                     let em = 0.6 + it.rarity as u8 as f32 * 0.35;
-                    self.inst.push(Prim::Card as u32, inst(Mat4::from_translation(p) * Mat4::from_rotation_y(-self.cam.yaw) * Mat4::from_scale(Vec3::new(0.08 + it.rarity as u8 as f32 * 0.03, tall, 1.0)), Tex::White, c, em));
+                    self.inst.push(Prim::Card as u32, inst(Mat4::from_translation(p) * Mat4::from_rotation_y(-self.cam.yaw) * Mat4::from_scale(Vec3::new(0.06 + it.rarity as u8 as f32 * 0.015, tall, 1.0)), Tex::White, c, em));
                 }
                 PickKind::Biomass(_) => {
                     self.inst.push(Prim::Sphere as u32, inst(trs(p, Quat::IDENTITY, Vec3::splat(0.14 + 0.03 * (t * 6.0 + id as f32).sin())), Tex::GrowthGlow, [1.0, 0.4, 0.7], 1.6));
@@ -382,7 +383,7 @@ impl Game {
         for c in self.area.chunks.values() {
             if let Some(m) = &c.mesh {
                 let center = (m.min + m.max) * 0.5;
-                let near = flat(center - sc).length() < 110.0;
+                let near = flat(center - sc).length() < 220.0;
                 if near && visible(&vp, m.min, m.max) {
                     statics.push(m);
                 }
@@ -393,11 +394,34 @@ impl Game {
             }
         }
 
+        for (k, m) in self.area.far.iter() {
+            if self.area.chunks.get(k).map(|c| c.mesh.is_some()).unwrap_or(false) {
+                continue;
+            }
+            if let Some(m) = m {
+                let center = (m.min + m.max) * 0.5;
+                if flat(center - cam).length() < 420.0 && visible(&vp, m.min, m.max) {
+                    statics.push(m);
+                }
+            }
+        }
+
         // ---- particles, lights, environment, ui
         self.part_buf.clear();
         self.parts.fill(&mut self.part_buf);
         let mut lights = std::mem::take(&mut self.light_buf);
-        self.gather_lights(&mut lights, t);
+        let key = self.gather_lights(&mut lights, t);
+        let mut key_statics: Vec<&StaticMesh> = Vec::new();
+        if let Some((kp, kr)) = key {
+            for c in self.area.chunks.values() {
+                if let Some(m) = &c.mesh {
+                    let q = kp.clamp(m.min, m.max);
+                    if (q - kp).length() < kr {
+                        key_statics.push(m);
+                    }
+                }
+            }
+        }
         for (p, rr, s, sw) in &self.distorts_temp {
             self.distorts.push(Distort { pos: *p, radius: *rr, strength: *s, swirl: *sw });
         }
@@ -408,6 +432,7 @@ impl Game {
         ui.clear();
         let hits = self.build_ui(&mut ui, uw, uh);
         let distorts = std::mem::take(&mut self.distorts);
+        self.build_ms = self.build_ms * 0.95 + self.build_start.elapsed().as_secs_f32() * 1000.0 * 0.05;
         r.render(&Frame {
             view,
             proj,
@@ -422,6 +447,8 @@ impl Game {
             distorts: &distorts,
             particles: &self.part_buf,
             ui: &ui,
+            key,
+            key_statics,
         });
         self.ui_buf = ui;
         self.ui.hits = hits;

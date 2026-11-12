@@ -2,6 +2,8 @@
 @group(1) @binding(1) var s_array: sampler;
 @group(1) @binding(2) var t_shadow: texture_depth_2d;
 @group(1) @binding(3) var s_shadow: sampler_comparison;
+@group(1) @binding(4) var t_key: texture_depth_2d;
+@group(2) @binding(0) var<uniform> KF: mat4x4<f32>;
 
 struct VIn {
     @location(0) pos: vec3<f32>,
@@ -68,6 +70,31 @@ fn vs_shadow(in: VIn) -> @builtin(position) vec4<f32> {
     return G.shadow_vp * vec4<f32>(world_pos(in), 1.0);
 }
 
+@vertex
+fn vs_key(in: VIn) -> @builtin(position) vec4<f32> {
+    return KF * vec4<f32>(world_pos(in), 1.0);
+}
+
+/// Shadow from the key point light, looked up in a 3x2 atlas of 90-degree faces.
+fn key_shadow(wp: vec3<f32>) -> f32 {
+    let d = wp - G.key.xyz;
+    let ad = abs(d);
+    var f = 0;
+    if (ad.x >= ad.y && ad.x >= ad.z) {
+        f = select(1, 0, d.x > 0.0);
+    } else if (ad.y >= ad.z) {
+        f = select(3, 2, d.y > 0.0);
+    } else {
+        f = select(5, 4, d.z > 0.0);
+    }
+    let c = G.key_vp[f] * vec4<f32>(wp, 1.0);
+    let ndc = c.xyz / c.w;
+    if (ndc.z >= 1.0 || c.w <= 0.0) { return 1.0; }
+    let uv = clamp(ndc.xy * vec2<f32>(0.5, -0.5) + 0.5, vec2<f32>(0.004), vec2<f32>(0.996));
+    let tile = vec2<f32>(f32(f % 3), f32(f / 3));
+    return textureSampleCompareLevel(t_key, s_shadow, (tile + uv) / vec2<f32>(3.0, 2.0), ndc.z - 0.0015);
+}
+
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let uv = mix(in.uv, in.uvw.xy / in.uvw.z, G.screen.w);
@@ -106,6 +133,9 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         if (d2 < r2) {
             var att = 1.0 - d2 / r2;
             att = att * att;
+            if (i == 0 && G.key.w > 0.5) {
+                att = att * key_shadow(in.wpos + n * 0.06);
+            }
             let Ld = L * inverseSqrt(max(d2, 1e-4));
             let c = G.light_col[i].rgb * att;
             light = light + c * (max(dot(n, Ld), 0.0) * 0.85 + 0.15);

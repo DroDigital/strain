@@ -195,7 +195,7 @@ impl Game {
                 e.sun_col = (moon_c.lerp(sun_c, day) + Vec3::new(0.6, 0.2, -0.1) * dusk * 0.5) * (1.0 - self.rain * 0.6 - self.fogw * 0.3);
                 let fog = Vec3::from(dd.fog);
                 e.ambient = (Vec3::new(0.06, 0.07, 0.1).lerp(Vec3::new(0.32, 0.32, 0.34), day) + fog * 0.6) * (1.0 - self.rain * 0.2);
-                e.fog_col = fog * (0.55 + day * 1.2) + Vec3::new(0.25, 0.1, 0.0) * dusk * 0.4 + Vec3::new(0.03, 0.12, 0.06) * self.spore;
+                e.fog_col = fog * (0.55 + day * 0.75) + Vec3::new(0.25, 0.1, 0.0) * dusk * 0.4 + Vec3::new(0.03, 0.12, 0.06) * self.spore;
                 e.fog_density = dd.fog_density * (1.0 + self.rain * 0.5 + self.fogw * 1.8 + self.spore * 1.2);
                 e.grade = Vec3::from(dd.grade);
                 e.saturation = dd.saturation;
@@ -240,7 +240,8 @@ impl Game {
     }
 
     /// Choose the most relevant lights for this frame.
-    pub fn gather_lights(&self, out: &mut Vec<Light>, t: f32) {
+    /// Returns the shadow-casting key light (always placed at index 0).
+    pub fn gather_lights(&self, out: &mut Vec<Light>, t: f32) -> Option<(Vec3, f32)> {
         out.clear();
         let cam = self.cam.eye;
         let pp = self.ppos();
@@ -298,9 +299,18 @@ impl Game {
             cands.push((0.0, Light { pos: pp + Vec3::Y * 1.3, radius: 4.0 + pf * 3.0, color: c }));
         }
         cands.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        for (_, l) in cands.into_iter().take(32) {
+        // key light: the closest strong source (fire pits, floodlights, burning wrecks, searchlights)
+        let key_i = cands.iter().position(|(_, l)| l.radius >= 12.0 && l.color.max_element() > 1.5 && (l.pos - pp).length() < l.radius * 0.9);
+        let mut key = None;
+        if let Some(i) = key_i {
+            let (_, l) = cands.remove(i);
+            key = Some((l.pos, l.radius));
             out.push(l);
         }
+        for (_, l) in cands.into_iter().take(32 - out.len()) {
+            out.push(l);
+        }
+        key
     }
 
     pub fn music_state(&self) -> MusicState {

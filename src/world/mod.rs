@@ -180,6 +180,8 @@ pub struct Area {
     /// rift only: start position, boss arena centre and radius
     pub start: Vec3,
     pub arena: (Vec3, f32),
+    /// low-detail silhouettes of every city chunk (drawn where the full chunk is not loaded)
+    pub far: HashMap<(i32, i32), Option<StaticMesh>>,
 }
 
 impl Statics for Area {
@@ -202,7 +204,7 @@ impl Statics for Area {
 
 impl Area {
     pub fn city(seed: u32) -> Area {
-        Area { kind: AreaKind::City, cell: CS, chunks: HashMap::new(), seed, epoch: 0, bosses_dead: [false; 5], start: Vec3::ZERO, arena: (Vec3::ZERO, 0.0) }
+        Area { kind: AreaKind::City, cell: CS, chunks: HashMap::new(), seed, epoch: 0, bosses_dead: [false; 5], start: Vec3::ZERO, arena: (Vec3::ZERO, 0.0), far: HashMap::new() }
     }
     pub fn key(&self, p: Vec3) -> (i32, i32) {
         ((p.x / self.cell).floor() as i32, (p.z / self.cell).floor() as i32)
@@ -254,7 +256,7 @@ impl Area {
     }
     pub fn rift(idx: usize, seed: u32, epoch: u32) -> Area {
         let (gens, start, arena) = rift::gen_rift(idx, seed ^ epoch.wrapping_mul(7919));
-        let mut a = Area { kind: AreaKind::Rift(idx), cell: rift::RS, chunks: HashMap::new(), seed, epoch, bosses_dead: [false; 5], start, arena };
+        let mut a = Area { kind: AreaKind::Rift(idx), cell: rift::RS, chunks: HashMap::new(), seed, epoch, bosses_dead: [false; 5], start, arena, far: HashMap::new() };
         for (k, g) in gens {
             a.chunks.insert(k, Self::make_chunk(g));
         }
@@ -271,6 +273,16 @@ impl Area {
             if let Some(mb) = c.pending.take() {
                 c.mesh = r.upload_mesh(&mb);
                 n += 1;
+            }
+        }
+        if self.kind == AreaKind::City && self.far.len() < ((CITY_W + 2) * (CITY_H + 2)) as usize {
+            for cz in -1..=CITY_H {
+                for cx in -1..=CITY_W {
+                    if !self.far.contains_key(&(cx, cz)) {
+                        let m = kit::far_chunk(self.seed, cx, cz);
+                        self.far.insert((cx, cz), r.upload_mesh(&m));
+                    }
+                }
             }
         }
     }

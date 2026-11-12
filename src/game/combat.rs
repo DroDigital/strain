@@ -553,7 +553,9 @@ impl Game {
         // apply
         let ta = self.w.actor.get_mut(t).unwrap();
         ta.hp -= amount;
-        ta.flash = 1.0;
+        if !matches!(kind, DmgKind::Rot | DmgKind::Fire | DmgKind::True) || amount > 5.0 {
+            ta.flash = 1.0;
+        }
         ta.since_hit = 0.0;
         ta.hit_dir = dir;
         let lethal = ta.hp <= 0.0;

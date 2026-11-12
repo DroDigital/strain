@@ -862,3 +862,44 @@ pub fn gen_chunk(seed: u32, epoch: u32, bosses_dead: &[bool; 5], cx: i32, cz: i3
 }
 
 pub fn _unused(_: Mat4) {}
+
+/// Low-detail silhouette of a city chunk, drawn when the full chunk is not streamed in.
+pub fn far_chunk(seed: u32, cx: i32, cz: i32) -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let o = Vec3::new(cx as f32 * CS, 0.0, cz as f32 * CS);
+    let Some(d) = district_of(cx, cz) else {
+        m.boxx(o, o + Vec3::new(CS, 16.0, CS), Tex::Concrete as u32, Tex::Roof as u32, rgb(0.6, 0.6, 0.62), 4.0, 63 & !8);
+        return m;
+    };
+    let mut r = seed_rng(seed ^ 0xfa7, cx as u32, cz as u32);
+    let state = DISTRICTS[d].state;
+    let (lo, hi) = match d {
+        2 => (6, 14),
+        3 => (2, 5),
+        4 => (3, 10),
+        _ => (3, 8),
+    };
+    let (a, b) = (ROAD + 3.0, CS - ROAD - 3.0);
+    let mid = (a + b) * 0.5;
+    let lit = match state {
+        DState::Held => 0.25,
+        DState::Contested => 0.08,
+        DState::Lost => 0.02,
+    };
+    for (x0, z0, x1, z1) in [(a, a, mid - 2.0, mid - 2.0), (mid + 2.0, a, b, mid - 2.0), (a, mid + 2.0, mid - 2.0, b), (mid + 2.0, mid + 2.0, b, b)] {
+        if chance(&mut r, 0.15) {
+            continue;
+        }
+        let h = r.u32(lo..=hi) as f32 * FLOOR_H;
+        let tex = if chance(&mut r, lit) { Tex::ConcreteWindowLit } else { Tex::ConcreteWindow };
+        let c = if tex == Tex::ConcreteWindowLit { [255, 220, 170, 160] } else { rgb(0.7, 0.7, 0.72) };
+        m.boxx(o + Vec3::new(x0, 0.0, z0), o + Vec3::new(x1, h, z1), tex as u32, Tex::Roof as u32, c, 3.2, 63 & !8);
+        if state == DState::Lost && chance(&mut r, 0.5) {
+            // growth crowns bending out of the roofs
+            let s = rf(&mut r, 3.0, 8.0);
+            let mt = trs(o + Vec3::new((x0 + x1) * 0.5, h + s * 0.5, (z0 + z1) * 0.5), Quat::from_rotation_z(rf(&mut r, -0.4, 0.4)), Vec3::new(1.5, s, 1.5));
+            m.obox(mt, Tex::Growth as u32, rgbe(0.8, 0.6, 0.8, 0.1));
+        }
+    }
+    m
+}

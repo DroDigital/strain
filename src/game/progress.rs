@@ -620,8 +620,9 @@ impl Game {
             self.add_exit_portal(c);
             self.start_cutscene(super::cutscene::CutKind::BossDeath(bi));
         } else {
+            // the world cannot be rebuilt mid-damage; the ending starts after this tick
             self.prof.ended = true;
-            self.start_cutscene(super::cutscene::CutKind::Ending);
+            self.pending_ending = 3.0;
         }
         self.save();
     }

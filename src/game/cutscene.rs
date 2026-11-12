@@ -60,11 +60,11 @@ impl Game {
         let (eye, target) = match c.kind {
             CutKind::Opening => {
                 // sweep from above the burning city down to the compatible at the stadium pit
-                let start = Vec3::new(CS * 9.0, 90.0, CS * 13.5);
-                let mid = pit_pos(0) + Vec3::new(-40.0, 40.0, 60.0);
+                let start = pit_pos(0) + Vec3::new(-120.0, 70.0, 260.0);
+                let mid = pit_pos(0) + Vec3::new(-40.0, 32.0, 70.0);
                 let end = pp + Vec3::new(-3.0, 2.2, 4.5);
                 let e = if k < 0.7 { start.lerp(mid, smooth(k / 0.7)) } else { mid.lerp(end, smooth((k - 0.7) / 0.3)) };
-                let t0 = Vec3::new(CS * 9.0, 0.0, CS * 6.0);
+                let t0 = pit_pos(0) + Vec3::new(60.0, 10.0, -40.0);
                 let t = if k < 0.6 { t0.lerp(pit_pos(0), smooth(k / 0.6)) } else { pit_pos(0).lerp(pp + Vec3::Y * 1.5, smooth((k - 0.6) / 0.4)) };
                 (e, t)
             }
@@ -72,7 +72,11 @@ impl Game {
                 let bp = self.boss.and_then(|b| self.w.body.get(b)).map(|b| b.pos).unwrap_or(self.area.arena.0);
                 let h = self.boss.and_then(|b| self.w.body.get(b)).map(|b| b.height).unwrap_or(4.0);
                 let a = c.t * 0.35 + 0.8;
-                let r = 7.0 + h + ease_out(k) * 2.0;
+                let (ac, ar) = self.area.arena;
+                let mut r = 7.0 + h + ease_out(k) * 2.0;
+                if ar > 0.0 {
+                    r = r.min((ar - 2.0 - (bp - ac).length()).max(4.0));
+                }
                 (bp + Vec3::new(a.cos() * r, h * 0.6 + 1.5, a.sin() * r), bp + Vec3::Y * h * 0.6)
             }
             CutKind::Ending => {

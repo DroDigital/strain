@@ -18,6 +18,8 @@ struct Globals {
     light_col: array<vec4<f32>, 32>,
     distort: array<vec4<f32>, 8>,    // xyz, radius
     distort2: array<vec4<f32>, 8>,   // strength, swirl
+    key_vp: array<mat4x4<f32>, 6>,   // shadow-casting point light faces
+    key: vec4<f32>,                  // xyz, enabled
 };
 @group(0) @binding(0) var<uniform> G: Globals;
 
