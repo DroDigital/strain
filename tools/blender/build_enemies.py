@@ -110,7 +110,7 @@ class Builder:
     def __init__(self, name, base, seed=1):
         self.name = name
         self.base = base
-        self.g = Glb(os.path.join(MODELS, base + ".glb"))
+        self.g = Glb(base if base.endswith(".glb") else os.path.join(MODELS, base + ".glb"))
         self.rng = random.Random(seed)
         self.parts = []
         self.joint_names = self.g.joint_names()
@@ -651,15 +651,20 @@ def write_model(b, out_path):
             q["prim"]["indices"] = g.add(tri.ravel().astype(np.uint32), "idx", 5125, target=34963)
         sk = q["skin"][tri].all(axis=1)
         if sk.any():
-            name = "T:" + b.skin_tex
+            # `C:` skins are per-character textures with their own UVs; `T:` layers tile
+            name = b.skin_tex if b.skin_tex.startswith("C:") else "T:" + b.skin_tex
             mats = g.j.setdefault("materials", [])
             mi = next((i for i, m in enumerate(mats) if m.get("name") == name), None)
             if mi is None:
                 mats.append({"name": name, "pbrMetallicRoughness": {"baseColorFactor": [1, 1, 1, 1], "metallicFactor": 0, "roughnessFactor": 0.8}})
                 mi = len(mats) - 1
             sa = dict(a)
-            sa["TEXCOORD_0"] = g.add(box_uv(q["pos"], q["nrm"]).astype(np.float32), "uv", 5126, target=34962)
+            if not name.startswith("C:"):
+                sa["TEXCOORD_0"] = g.add(box_uv(q["pos"], q["nrm"]).astype(np.float32), "uv", 5126, target=34962)
             q["prim"]["indices"] = g.add(tri[~sk].ravel().astype(np.uint32), "idx", 5125, target=34963)
+            if (~sk).sum() == 0:
+                # nothing left on the original material: drop it rather than ship its vertices
+                g.j["meshes"][q["mesh"]]["primitives"].remove(q["prim"])
             g.j["meshes"][q["mesh"]]["primitives"].append({"attributes": sa, "indices": g.add(tri[sk].ravel().astype(np.uint32), "idx", 5125, target=34963), "material": mi})
     # new parts, grouped per texture into primitives of the main body mesh
     groups = {}

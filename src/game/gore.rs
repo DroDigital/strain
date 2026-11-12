@@ -61,6 +61,7 @@ const PLATED: &[&[&str]] = &[&["Head"], &["LowerArm.L"], &["LowerArm.R"]];
 const DOG: &[&[&str]] = &[&["Head"], &["FrontUpperLeg.L", "FF.L"], &["FrontUpperLeg.R", "FF.R"], &["BackUpperLeg.L", "FFB.L"], &["BackUpperLeg.R", "FFB.R"], &["Tail1"]];
 const LARVA: &[&[&str]] = &[&["UpperLeg.L", "Foot.L"], &["UpperLeg.R", "Foot.R"], &["Abdomen"]];
 const ARMS: &[&[&str]] = &[&["UpperArm.L"], &["UpperArm.R"], &["Head"]];
+const CRAWLER: &[&[&str]] = &[&["Head"], &["LowerArm.L"], &["LowerArm.R"], &["UpperArm.L"], &["UpperArm.R"], &["Torso"]];
 
 const RED: [f32; 3] = [0.2, 0.012, 0.012];
 const DARK: [f32; 3] = [0.12, 0.02, 0.03];
@@ -71,13 +72,14 @@ pub fn profile(model: &str) -> GoreProfile {
     let p = |blood, chunk, parts, head_pops, bleed, special, give, pool| GoreProfile { blood, chunk, parts, head_pops, bleed, special, give, pool };
     match model {
         "Characters_GermanShepherd" => p(Fx::Blood, Fx::Bone, DOG, false, 3.0, Special::None, 1.0, RED),
-        m if m.starts_with("Characters_") => p(Fx::Blood, Fx::Bone, HUMAN, true, 4.0, Special::None, 1.0, RED),
+        m if m.starts_with("Characters_") || m.starts_with("Human_") => p(Fx::Blood, Fx::Bone, HUMAN, true, 4.0, Special::None, 1.0, RED),
         "Strain_Carrier" => p(Fx::Blood, Fx::Bone, HALVES, true, 3.5, Special::None, 1.1, DARK),
         "Strain_Shambler" => p(Fx::Ichor, Fx::Bone, HUMAN, true, 3.0, Special::Spores, 1.1, ICHOR),
         "Strain_Bulk" => p(Fx::Ichor, Fx::Bone, BRUTE, true, 5.0, Special::Pus, 0.6, ICHOR),
         "Strain_Skitter" => p(Fx::Ichor, Fx::Bone, DOG, false, 2.5, Special::None, 1.2, ICHOR),
         "Strain_Retch" => p(Fx::Acid, Fx::Bone, ARMS, true, 4.0, Special::Acid, 1.0, [0.08, 0.14, 0.02]),
-        "Strain_Larva" => p(Fx::Ichor, Fx::Bone, LARVA, false, 2.0, Special::None, 1.4, ICHOR),
+        // the crawler is a torso dragging itself: arms, head, or the whole upper body
+        "Strain_Larva" => p(Fx::Blood, Fx::Bone, CRAWLER, true, 3.0, Special::None, 1.4, DARK),
         "Strain_Bulwark" => p(Fx::Ichor, Fx::Bone, PLATED, false, 2.5, Special::None, 0.5, ICHOR),
         "Strain_Lurker" => p(Fx::Ichor, Fx::Bone, HUMAN, true, 3.0, Special::Void, 1.1, DARK),
         "Strain_Matron" => p(Fx::Ichor, Fx::Bone, BRUTE, false, 4.0, Special::Larvae, 0.8, ICHOR),
@@ -540,7 +542,7 @@ mod tests {
             for g in p.parts {
                 assert!(m.skeleton.find(g[0]).is_some(), "{}: no bone {}", m.name, g[0]);
             }
-            if m.name.starts_with("Strain_") || m.name.starts_with("Characters_") {
+            if m.name.starts_with("Strain_") || m.name.starts_with("Characters_") || m.name.starts_with("Human_") {
                 assert!(!p.parts.is_empty(), "{} cannot be dismembered", m.name);
             }
         }

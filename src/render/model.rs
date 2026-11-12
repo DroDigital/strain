@@ -591,42 +591,65 @@ mod fracture_tests {
 
 #[cfg(test)]
 mod infected_tests {
-    /// The Blender-built infected keep their base model's skeleton and clips exactly (clips are
-    /// shared between models by bone name) and their new parts resolve to real texture layers.
+    use glam::{Mat4, Vec3};
+    /// The Blender-built humans and infected stand on the realistic skeleton, draw their clips from
+    /// a retargeted library that has everything the game asks for, and every material resolves.
     #[test]
-    fn custom_infected_match_their_bases() {
-        let all = super::load_all();
-        let get = |n: &str| all.iter().find(|m| m.name == n).unwrap_or_else(|| panic!("missing model {n}"));
-        let pairs = [
-            ("Strain_Carrier", "Zombie_Basic"),
-            ("Strain_Shambler", "Zombie_Arm"),
-            ("Strain_Bulk", "Zombie_Chubby"),
-            ("Strain_Retch", "Zombie_Chubby"),
-            ("Strain_Larva", "Zombie_Ribcage"),
-            ("Strain_Bulwark", "Zombie_Basic"),
-            ("Strain_Lurker", "Zombie_Arm"),
-            ("Strain_Matron", "Zombie_Chubby"),
-            ("Strain_Skitter", "Characters_GermanShepherd"),
-            ("Strain_Digestor", "Zombie_Chubby"),
-            ("Strain_Geometer", "Zombie_Basic"),
-            ("Strain_MotherCinder", "Zombie_Chubby"),
-            ("Strain_Cantor", "Zombie_Basic"),
-            ("Strain_Seed", "Zombie_Arm"),
+    fn realistic_characters_are_complete() {
+        let mut prims = crate::render::mesh::MeshBuilder::new();
+        let mut ranges = Vec::new();
+        let lib = super::Library::build(&mut prims, &mut ranges);
+        let names = [
+            "Human_Player", "Human_Soldier_M", "Human_Soldier_F", "Human_Civilian_M1", "Human_Civilian_M2", "Human_Civilian_F1", "Human_Civilian_F2",
+            "Strain_Carrier", "Strain_Shambler", "Strain_Bulk", "Strain_Retch", "Strain_Larva", "Strain_Bulwark", "Strain_Lurker", "Strain_Matron",
+            "Strain_Digestor", "Strain_Geometer", "Strain_MotherCinder", "Strain_Cantor", "Strain_Seed",
         ];
-        for (custom, base) in pairs {
-            let (c, b) = (get(custom), get(base));
-            assert!(c.skinned(), "{custom} is not skinned");
-            let names = |m: &super::Model| m.skeleton.joints.iter().map(|j| (j.name.clone(), j.r.to_array().map(|x| (x * 1e4).round() as i32))).collect::<Vec<_>>();
-            assert_eq!(names(c), names(b), "{custom} skeleton differs from {base}");
-            assert_eq!(c.clips.len(), b.clips.len(), "{custom} clips differ from {base}");
-            assert!(c.skin_verts.len() > b.skin_verts.len(), "{custom} has no new parts");
+        for n in names {
+            let i = *lib.index.get(n).unwrap_or_else(|| panic!("missing model {n}"));
+            let c = &lib.models[i];
+            assert!(c.skinned() && c.skeleton.realistic(), "{n} is not a realistic skinned model");
+            let d = *lib.clip_donor.get(&i).unwrap_or_else(|| panic!("{n} has no clip library"));
+            for clip in ["Idle_Loop", "Walk_Loop", "Jog_Fwd_Loop", "Sword_Attack", "Hit_Chest", "Z_Walk", "Z_Run", "Z_Attack", "Z_Crawl"] {
+                assert!(lib.models[d].clip(clip).is_some(), "{n}: library {} lacks {clip}", lib.models[d].name);
+            }
             let layers: std::collections::HashSet<i32> = c.skin_verts.iter().map(|v| v.uv[2] as i32).collect();
-            assert!(layers.iter().any(|&l| l > 0 && l < 250), "{custom} has no texture-layer parts");
-            assert!(!layers.contains(&0), "{custom} has a part with an unknown material");
-            let n = c.skin_verts.len() as u32;
-            assert!(c.skin_idx.iter().all(|&i| i < n), "{custom} index out of range");
-            assert!(c.skin_verts.iter().all(|v| (v.weights.iter().sum::<f32>() - 1.0).abs() < 0.02), "{custom} weights not normalised");
+            assert!(!layers.contains(&0), "{n} has a part with an unknown material");
+            assert!(layers.iter().any(|&l| l >= 300), "{n} has no per-character skin");
+            let nv = c.skin_verts.len() as u32;
+            assert!(c.skin_idx.iter().all(|&k| k < nv), "{n} index out of range");
+            assert!(c.skin_verts.iter().all(|v| (v.weights.iter().sum::<f32>() - 1.0).abs() < 0.02), "{n} weights not normalised");
+            // a sensible human stature
+            let h = c.max.y - c.min.y;
+            assert!((1.3..2.6).contains(&h), "{n} is {h} m tall");
         }
+        // clips keep the feet on the floor: the lowest skinned vertex stays near the ground
+        for n in ["Human_Player", "Human_Civilian_F1", "Strain_MotherCinder", "Strain_Carrier"] {
+            let i = lib.index[n];
+            let m = &lib.models[i];
+            let d = &lib.models[lib.clip_donor[&i]];
+            for clip in ["Idle_Loop", "Walk_Loop", "Z_Idle", "Z_Walk", "Z_Attack", "Z_Scream", "Sword_Attack"] {
+                let c = &d.clips[d.clip(clip).unwrap()];
+                let mut lo = f32::MAX;
+                for t in [0.0, 0.3, 0.6] {
+                    let mut p = super::Pose::rest(&m.skeleton);
+                    p.sample(&m.skeleton, &d.skeleton, c, c.duration * t, 1.0);
+                    let g = p.globals(&m.skeleton);
+                    let pal: Vec<Mat4> = g.iter().zip(&m.skeleton.joints).map(|(g, j)| *g * j.inverse_bind).collect();
+                    for v in m.skin_verts.iter().step_by(7) {
+                        let mut q = Vec3::ZERO;
+                        for k in 0..4 {
+                            q += pal[v.joints[k] as usize].transform_point3(Vec3::from(v.pos)) * v.weights[k];
+                        }
+                        lo = lo.min(q.y);
+                    }
+                }
+                eprintln!("{n} {clip}: lowest point {lo:.3} m (bind {:.3})", m.min.y);
+                assert!(lo.abs() < 0.12, "{n} {clip}: feet {lo} m off the floor");
+            }
+        }
+        // the kit dog stays on its own rig and clips
+        let sk = &lib.models[lib.index["Strain_Skitter"]];
+        assert!(sk.skinned() && !sk.clips.is_empty());
     }
 }
 

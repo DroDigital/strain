@@ -250,6 +250,12 @@ def retarget(src_g, src_sk, anim, dst_sk, bone_map, src_child, dst_child, name):
         align[d] = a.rotation_difference(b) if a is not None and b is not None else Quaternion()
     src_pel = bone_map.get("pelvis")
     s_h = src_sk.pos(src_sk.rest_g, src_pel).y if src_pel else 1.0
+    # feet, for grounding: the source's lowest foot joint relative to its rest height, scaled,
+    # becomes the target's
+    s_feet = [src_sk.find(bone_map[f]) for f in ("foot_l", "foot_r") if f in bone_map and src_sk.find(bone_map[f]) is not None]
+    d_feet = [dst_sk.find(f) for f in ("foot_l", "foot_r", "ball_l", "ball_r") if dst_sk.find(f) is not None]
+    s_rest = min(src_sk.rest_g[i].to_translation().y for i in s_feet) if s_feet else 0.0
+    d_rest = min(dst_sk.rest_g[i].to_translation().y for i in d_feet) if d_feet else 0.0
     d_h = dst_sk.pos(dst_sk.rest_g, "pelvis").y
     k_h = d_h / max(abs(s_h), 1e-4)
     rots = {i: [] for i in range(len(dst_sk.joints))}
@@ -294,8 +300,18 @@ def retarget(src_g, src_sk, anim, dst_sk, bone_map, src_child, dst_child, name):
             pi = dst_sk.find("pelvis")
             wp = dst_sk.rest_g[pi].to_translation() + delta
             pp = dst_sk.parent[pi]
-            pm = dst_sk.globals(dst_sk.rest_t, [rots[j][-1] if rots[j] else dst_sk.rest_r[j] for j in range(len(dst_sk.joints))], dst_sk.rest_s)[pp] if pp is not None else dst_sk.pre
-            pel_t.append(pm.inverted() @ wp)
+            cur_r = [rots[j][-1] if rots[j] else dst_sk.rest_r[j] for j in range(len(dst_sk.joints))]
+            pm = dst_sk.globals(dst_sk.rest_t, cur_r, dst_sk.rest_s)[pp] if pp is not None else dst_sk.pre
+            loc = pm.inverted() @ wp
+            if s_feet and d_feet:
+                ts2 = list(dst_sk.rest_t)
+                ts2[pi] = loc
+                dg = dst_sk.globals(ts2, cur_r, dst_sk.rest_s)
+                low = min(dg[i].to_translation().y for i in d_feet)
+                want = d_rest + (min(sg[i].to_translation().y for i in s_feet) - s_rest) * k_h
+                wp = wp + Vector((0, want - low, 0))
+                loc = pm.inverted() @ wp
+            pel_t.append(loc)
     return name, times, rots, pel_t
 
 

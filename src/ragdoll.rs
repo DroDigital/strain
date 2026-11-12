@@ -283,12 +283,14 @@ mod tests {
     #[test]
     fn ragdoll_falls_and_settles_on_the_floor() {
         let all = load_all();
-        for name in ["Characters_Matt_SingleWeapon", "Strain_Bulk", "Strain_Skitter", "Strain_Larva"] {
+        for name in ["Characters_Matt_SingleWeapon", "Human_Player", "Human_Civilian_F1", "Strain_Bulk", "Strain_Skitter", "Strain_Larva"] {
             let m = all.iter().find(|m| m.name == name).unwrap();
             let skel = &m.skeleton;
             let mut p = Pose::rest(skel);
-            let c = &m.clips[m.clip("Idle").or(m.clip("Walk")).unwrap_or(0)];
-            p.sample(skel, skel, c, 0.0, 1.0);
+            // realistic models keep their clips in a library: those fall from the bind pose
+            if let Some(c) = m.clip("Idle").or(m.clip("Walk")).map(|i| &m.clips[i]) {
+                p.sample(skel, skel, c, 0.0, 1.0);
+            }
             let world = Mat4::from_scale(Vec3::splat(1.75 / (m.max.y - m.min.y)));
             let g: Vec<Mat4> = p.globals(skel).iter().map(|g| world * *g).collect();
             let d = deforming(skel, m.skin_verts.iter().map(|v| (v.joints, v.weights)));
