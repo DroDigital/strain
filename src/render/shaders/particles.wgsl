@@ -64,6 +64,10 @@ fn fs_main(in: POut) -> @location(0) vec4<f32> {
         a = (1.0 - abs(in.c.x)) * (1.0 - abs(in.c.y) * abs(in.c.y));
         a = a * a;
     }
+    // opaque-ish particles (blood, grit, smoke) are lit by the scene instead of glowing
+    if (in.par.w < 0.5) {
+        rgb = rgb * (G.ambient.rgb * 1.5 + G.sun_col.rgb * 0.45 + G.fog_col.rgb * 0.4);
+    }
     a = a * in.color.a;
     return vec4<f32>(rgb * a, a * (1.0 - in.par.w));
 }

@@ -35,7 +35,6 @@ pub struct District {
     pub fog: [f32; 3],
     pub grade: [f32; 3],
     pub saturation: f32,
-    pub palette_levels: f32,
     pub fog_density: f32,
     /// local chunk coordinates of specials
     pub pits: [(i32, i32); 2],
@@ -44,12 +43,12 @@ pub struct District {
 }
 
 pub const DISTRICTS: [District; 6] = [
-    District { name: "THE CORDON", state: DState::Held, levels: (1, 5), landmark: "STADIUM FOB", grid: (1, 0), fog: [0.10, 0.11, 0.14], grade: [1.05, 1.0, 0.92], saturation: 0.9, palette_levels: 28.0, fog_density: 0.012, pits: [(2, 2), (4, 4)], rift: None, landmark_at: (3, 3) },
-    District { name: "MARKET ROW", state: DState::Contested, levels: (5, 10), landmark: "THE CLOCK", grid: (0, 0), fog: [0.14, 0.10, 0.08], grade: [1.1, 0.95, 0.8], saturation: 0.85, palette_levels: 22.0, fog_density: 0.018, pits: [(4, 1), (1, 2)], rift: Some((1, 4)), landmark_at: (2, 3) },
-    District { name: "THE TENEMENTS", state: DState::Contested, levels: (10, 15), landmark: "THE SPIRE", grid: (2, 0), fog: [0.08, 0.11, 0.13], grade: [0.85, 1.0, 1.1], saturation: 0.75, palette_levels: 20.0, fog_density: 0.02, pits: [(1, 1), (4, 2)], rift: Some((4, 4)), landmark_at: (3, 2) },
-    District { name: "RAIL YARDS", state: DState::Contested, levels: (15, 20), landmark: "WATER TOWER", grid: (2, 1), fog: [0.13, 0.12, 0.09], grade: [1.05, 1.0, 0.8], saturation: 0.7, palette_levels: 18.0, fog_density: 0.022, pits: [(1, 4), (4, 4)], rift: Some((4, 1)), landmark_at: (2, 2) },
-    District { name: "THE BLOOM", state: DState::Lost, levels: (20, 30), landmark: "THE FIRST FLOWER", grid: (0, 1), fog: [0.10, 0.05, 0.12], grade: [1.0, 0.8, 1.15], saturation: 1.1, palette_levels: 14.0, fog_density: 0.03, pits: [(4, 4), (2, 4)], rift: Some((1, 1)), landmark_at: (3, 2) },
-    District { name: "GROUND ZERO", state: DState::Lost, levels: (30, 40), landmark: "THE CRATER", grid: (1, 1), fog: [0.04, 0.10, 0.09], grade: [0.8, 1.1, 1.0], saturation: 1.0, palette_levels: 12.0, fog_density: 0.034, pits: [(1, 1), (4, 0)], rift: Some((3, 3)), landmark_at: (3, 3) },
+    District { name: "THE CORDON", state: DState::Held, levels: (1, 5), landmark: "STADIUM FOB", grid: (1, 0), fog: [0.10, 0.11, 0.14], grade: [1.05, 1.0, 0.92], saturation: 0.9, fog_density: 0.012, pits: [(2, 2), (4, 4)], rift: None, landmark_at: (3, 3) },
+    District { name: "MARKET ROW", state: DState::Contested, levels: (5, 10), landmark: "THE CLOCK", grid: (0, 0), fog: [0.14, 0.10, 0.08], grade: [1.1, 0.95, 0.8], saturation: 0.85, fog_density: 0.018, pits: [(4, 1), (1, 2)], rift: Some((1, 4)), landmark_at: (2, 3) },
+    District { name: "THE TENEMENTS", state: DState::Contested, levels: (10, 15), landmark: "THE SPIRE", grid: (2, 0), fog: [0.08, 0.11, 0.13], grade: [0.85, 1.0, 1.1], saturation: 0.75, fog_density: 0.02, pits: [(1, 1), (4, 2)], rift: Some((4, 4)), landmark_at: (3, 2) },
+    District { name: "RAIL YARDS", state: DState::Contested, levels: (15, 20), landmark: "WATER TOWER", grid: (2, 1), fog: [0.13, 0.12, 0.09], grade: [1.05, 1.0, 0.8], saturation: 0.7, fog_density: 0.022, pits: [(1, 4), (4, 4)], rift: Some((4, 1)), landmark_at: (2, 2) },
+    District { name: "THE BLOOM", state: DState::Lost, levels: (20, 30), landmark: "THE FIRST FLOWER", grid: (0, 1), fog: [0.10, 0.05, 0.12], grade: [1.0, 0.8, 1.15], saturation: 1.1, fog_density: 0.03, pits: [(4, 4), (2, 4)], rift: Some((1, 1)), landmark_at: (3, 2) },
+    District { name: "GROUND ZERO", state: DState::Lost, levels: (30, 40), landmark: "THE CRATER", grid: (1, 1), fog: [0.04, 0.10, 0.09], grade: [0.8, 1.1, 1.0], saturation: 1.0, fog_density: 0.034, pits: [(1, 1), (4, 0)], rift: Some((3, 3)), landmark_at: (3, 3) },
 ];
 
 /// District index for a chunk coordinate, or None outside the city.

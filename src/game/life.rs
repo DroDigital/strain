@@ -196,10 +196,19 @@ impl Game {
                 let fog = Vec3::from(dd.fog);
                 e.ambient = (Vec3::new(0.06, 0.07, 0.1).lerp(Vec3::new(0.32, 0.32, 0.34), day) + fog * 0.6) * (1.0 - self.rain * 0.2);
                 e.fog_col = fog * (0.55 + day * 0.75) + Vec3::new(0.25, 0.1, 0.0) * dusk * 0.4 + Vec3::new(0.03, 0.12, 0.06) * self.spore;
-                e.fog_density = dd.fog_density * (1.0 + self.rain * 0.5 + self.fogw * 1.8 + self.spore * 1.2);
+                // dense, layered fog: street mist, a base haze, and a heavy smog layer that thickens
+                // with altitude so upper floors and rooftops sink into it
+                e.fog_density = dd.fog_density * 1.3 * (1.0 + self.rain * 0.5 + self.fogw * 1.8 + self.spore * 1.2);
+                e.fog_height = 0.45;
+                e.ground_mist = 1.4 + self.rain * 0.8 + self.fogw;
+                e.fog_elev = (4.5, 24.0);
+                e.fog_elev_mult = 3.4 + self.fogw * 2.0;
+                e.fog_noise = 0.75;
+                e.wind = Vec3::new(1.2, 0.1, 0.5) * (1.0 + self.rain);
+                e.exposure = 1.05 - 0.15 * day + 0.25 * (1.0 - day);
                 e.grade = Vec3::from(dd.grade);
-                e.saturation = dd.saturation;
-                e.levels = dd.palette_levels;
+                // photographic grade: muted, never pushed past natural saturation
+                e.saturation = dd.saturation.min(0.95) * 0.92;
                 e.wetness = self.wet;
                 e.warp = if dd.state == DState::Lost { 1.0 + if d == 5 { 0.6 } else { 0.0 } } else { 0.0 };
                 e.shaft = 1.2 + day * 0.4;
@@ -213,10 +222,14 @@ impl Game {
                 e.ambient = Vec3::from(r.fog) * 1.2 + Vec3::splat(0.04);
                 e.fog_col = Vec3::from(r.fog);
                 e.fog_density = r.fog_density;
-                e.fog_height = 0.02;
+                e.fog_height = 0.6;
+                e.fog_elev = (3.0, 14.0);
+                e.fog_elev_mult = 2.2;
+                e.ground_mist = 2.0;
+                e.fog_noise = 0.9;
+                e.wind = Vec3::new(0.4, 0.35, 0.2);
                 e.grade = Vec3::from(r.grade);
-                e.saturation = 1.0;
-                e.levels = r.levels;
+                e.saturation = 0.9;
                 e.wetness = if i == 0 { 1.0 } else { 0.3 };
                 e.warp = r.warp;
                 e.shaft = 0.8;
@@ -224,11 +237,13 @@ impl Game {
             }
         }
         e.strain = strain_vis;
-        e.vignette = 0.45 + self.hurt_flash * 0.6;
-        e.flash = self.flash.min(1.0) * 0.6;
+        e.vignette = 0.3 + self.hurt_flash * 0.5;
+        e.flash = self.flash.min(1.0) * 0.25;
         e.fade = self.fade;
         if self.hurt_flash > 0.0 {
-            e.grade *= Vec3::new(1.0 + self.hurt_flash * 0.6, 1.0 - self.hurt_flash * 0.3, 1.0 - self.hurt_flash * 0.3);
+            // taking damage drains colour and darkens the frame edges rather than tinting it red
+            e.saturation *= 1.0 - self.hurt_flash * 0.55;
+            e.grade *= Vec3::new(1.0 + self.hurt_flash * 0.15, 1.0 - self.hurt_flash * 0.12, 1.0 - self.hurt_flash * 0.12);
         }
         if matches!(self.pl.affliction, Some((crate::game::player::Affliction::Blur, _))) {
             e.strain = (e.strain + 0.6).min(1.0);

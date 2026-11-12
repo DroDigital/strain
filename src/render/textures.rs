@@ -1,9 +1,12 @@
 //! Texture layers: CC0 photo textures (assets/textures) combined with procedural overlays
-//! (windows, signs, veins, glow lines), 256x256 RGBA, built at load time.
+//! (windows, signs, veins, glow lines), 512x512 RGBA, built at load time.
+//!
+//! Every layer comes as a pair: albedo (sRGB, alpha = cut-out, ambient occlusion folded in) and a
+//! linear material layer (R/G tangent-space normal, B roughness, A metalness) for the PBR shader.
 use crate::util::{fbm2, hash01, noise2};
-use glam::Vec2;
+use glam::{Vec2, Vec3};
 
-pub const TEX: usize = 256;
+pub const TEX: usize = 512;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u32)]
@@ -59,6 +62,8 @@ pub enum Tex {
 /// A photo texture from assets/textures, as linear-ish 0..1 RGB (sRGB values, as authored).
 struct Photo {
     px: Vec<[f32; 3]>,
+    /// packed material map: normal x/y, roughness, ambient occlusion (0..1)
+    mat: Vec<[f32; 4]>,
 }
 impl Photo {
     fn load(name: &str) -> Photo {
@@ -67,7 +72,14 @@ impl Photo {
             Some(im) if im.w == TEX && im.h == TEX => im.px.chunks(4).map(|c| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0]).collect(),
             _ => vec![[0.5; 3]; TEX * TEX],
         };
-        Photo { px }
+        let mat = match crate::assets::image(&format!("textures/{name}_n.png")) {
+            Some(im) if im.w == TEX && im.h == TEX => im.px.chunks(4).map(|c| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, c[3] as f32 / 255.0]).collect(),
+            _ => vec![[0.5, 0.5, 0.7, 1.0]; TEX * TEX],
+        };
+        Photo { px, mat }
+    }
+    fn mat_at(&self, x: usize, y: usize) -> [f32; 4] {
+        self.mat[(y % TEX) * TEX + (x % TEX)]
     }
     fn at(&self, x: usize, y: usize) -> [f32; 3] {
         self.px[(y % TEX) * TEX + (x % TEX)]
@@ -158,7 +170,47 @@ fn with_window(base: [f32; 3], u: f32, v: f32, lit: bool, seed: u32) -> [f32; 3]
     }
 }
 
-pub fn generate(layer: Tex) -> Vec<u8> {
+/// Physical surface response of a layer: (roughness override or -1 to use the photo map,
+/// roughness multiplier, metalness, strength of the bump derived from the albedo).
+fn surface(layer: Tex) -> (f32, f32, f32, f32) {
+    match layer {
+        Tex::White => (0.6, 1.0, 0.0, 0.0),
+        Tex::Asphalt | Tex::RoadLine => (-1.0, 1.0, 0.0, 0.6),
+        Tex::Sidewalk | Tex::Concrete | Tex::Plaster | Tex::Tile => (-1.0, 1.0, 0.0, 0.5),
+        Tex::Brick => (-1.0, 1.0, 0.0, 0.4),
+        Tex::BrickWindow | Tex::ConcreteWindow | Tex::PlasterWindow | Tex::BrickWindowLit | Tex::ConcreteWindowLit | Tex::PlasterWindowLit => (-1.0, 1.0, 0.0, 1.2),
+        Tex::Shopfront | Tex::ShopfrontLit => (-1.0, 0.7, 0.6, 1.0),
+        Tex::Door => (-1.0, 1.0, 0.0, 1.4),
+        Tex::Roof => (-1.0, 1.0, 0.0, 0.5),
+        Tex::Metal => (-1.0, 0.9, 1.0, 0.3),
+        Tex::Rust => (-1.0, 1.1, 0.35, 0.6),
+        Tex::Wood | Tex::Crate => (-1.0, 1.0, 0.0, 0.7),
+        Tex::Fence => (0.45, 1.0, 1.0, 0.3),
+        Tex::Camo | Tex::Cloth | Tex::Tarp | Tex::Sandbag => (-1.0, 1.15, 0.0, 0.6),
+        Tex::Skin => (0.48, 1.0, 0.0, 0.35),
+        Tex::Flesh => (0.3, 1.0, 0.0, 1.0),
+        Tex::Vein => (0.28, 1.0, 0.0, 1.2),
+        Tex::Bone => (-1.0, 0.8, 0.0, 0.8),
+        Tex::Chitin => (0.32, 1.0, 0.0, 0.9),
+        Tex::Growth => (0.35, 1.0, 0.0, 1.0),
+        Tex::GrowthGlow => (0.25, 1.0, 0.0, 0.8),
+        Tex::RiftStone => (-1.0, 0.9, 0.0, 0.7),
+        Tex::RiftGlow => (-1.0, 0.7, 0.0, 0.7),
+        Tex::Char => (-1.0, 1.2, 0.0, 0.8),
+        Tex::Ember => (-1.0, 1.0, 0.0, 0.6),
+        Tex::Graffiti => (-1.0, 0.9, 0.0, 0.4),
+        Tex::Sign => (0.35, 1.0, 0.2, 0.6),
+        Tex::Poster => (-1.0, 1.0, 0.0, 0.3),
+        Tex::Glass => (0.06, 1.0, 0.0, 0.1),
+        Tex::Grass => (-1.0, 1.1, 0.0, 0.6),
+        Tex::GutWall => (0.22, 1.0, 0.0, 1.3),
+        Tex::Lattice => (0.2, 1.0, 0.6, 0.8),
+        Tex::Count => (0.6, 1.0, 0.0, 0.0),
+    }
+}
+
+/// Generate one layer: (albedo RGBA8 sRGB, material RGBA8 linear).
+pub fn generate(layer: Tex) -> (Vec<u8>, Vec<u8>) {
     let mut t = vec![255u8; TEX * TEX * 4];
     let s = layer as u32 * 97 + 11;
     let photo = |name: &str| Photo::load(name);
@@ -312,14 +364,48 @@ pub fn generate(layer: Tex) -> Vec<u8> {
                     if g { [0.6, 0.75, 1.0] } else { mul([0.05, 0.06, 0.14], 0.6 + n * 0.8) }
                 }
             };
-            px(&mut t, x, y, c, a);
+            let ao = base.as_ref().map(|p| p.mat_at(x, y)[3]).unwrap_or(1.0);
+            px(&mut t, x, y, mul(c, 0.35 + 0.65 * ao), a);
         }
     }
-    t
+    let m = material(layer, &t, base.as_ref());
+    (t, m)
 }
 
-/// Box-filter downsample one RGBA level.
-pub fn downsample(src: &[u8], size: usize) -> Vec<u8> {
+/// Material layer: the photo's normal and roughness maps, plus a bump derived from the final
+/// albedo so procedural overlays (window frames, panels, veins, lettering) get relief too.
+fn material(layer: Tex, albedo: &[u8], photo: Option<&Photo>) -> Vec<u8> {
+    let (rough_fix, rough_mul, metal, bump) = surface(layer);
+    let lum = |x: usize, y: usize| {
+        let i = ((y % TEX) * TEX + (x % TEX)) * 4;
+        (albedo[i] as f32 * 0.3 + albedo[i + 1] as f32 * 0.55 + albedo[i + 2] as f32 * 0.15) / 255.0
+    };
+    let mut out = vec![0u8; TEX * TEX * 4];
+    for y in 0..TEX {
+        for x in 0..TEX {
+            let (xm, xp, ym, yp) = ((x + TEX - 1) % TEX, (x + 1) % TEX, (y + TEX - 1) % TEX, (y + 1) % TEX);
+            // Sobel gradient of the albedo luminance, read as height
+            let gx = (lum(xp, ym) + 2.0 * lum(xp, y) + lum(xp, yp)) - (lum(xm, ym) + 2.0 * lum(xm, y) + lum(xm, yp));
+            let gy = (lum(xm, yp) + 2.0 * lum(x, yp) + lum(xp, yp)) - (lum(xm, ym) + 2.0 * lum(x, ym) + lum(xp, ym));
+            let pm = photo.map(|p| p.mat_at(x, y)).unwrap_or([0.5, 0.5, 0.7, 1.0]);
+            // photo normals are OpenGL convention (+Y up the image); image rows run downward
+            let mut n = Vec3::new(pm[0] * 2.0 - 1.0, pm[1] * 2.0 - 1.0, 1.0);
+            n.x -= gx * bump * 0.9;
+            n.y += gy * bump * 0.9;
+            let n = n.normalize();
+            let rough = if rough_fix >= 0.0 { (rough_fix * (0.85 + 0.3 * pm[2])).min(1.0) } else { (pm[2] * rough_mul).clamp(0.04, 1.0) };
+            let i = (y * TEX + x) * 4;
+            out[i] = ((n.x * 0.5 + 0.5) * 255.0).round() as u8;
+            out[i + 1] = ((n.y * 0.5 + 0.5) * 255.0).round() as u8;
+            out[i + 2] = (rough * 255.0).round() as u8;
+            out[i + 3] = (metal * 255.0).round() as u8;
+        }
+    }
+    out
+}
+
+/// Box-filter downsample one RGBA level. `cutout` thresholds alpha so cut-outs stay crisp.
+pub fn downsample(src: &[u8], size: usize, cutout: bool) -> Vec<u8> {
     let h = size / 2;
     let mut out = vec![0u8; h * h * 4];
     for y in 0..h {
@@ -328,7 +414,7 @@ pub fn downsample(src: &[u8], size: usize) -> Vec<u8> {
                 let s = |xx: usize, yy: usize| src[(yy * size + xx) * 4 + c] as u32;
                 let v = (s(x * 2, y * 2) + s(x * 2 + 1, y * 2) + s(x * 2, y * 2 + 1) + s(x * 2 + 1, y * 2 + 1)) / 4;
                 // keep cut-outs crisp
-                out[(y * h + x) * 4 + c] = if c == 3 { if v > 96 { 255 } else { 0 } } else { v as u8 };
+                out[(y * h + x) * 4 + c] = if c == 3 && cutout { if v > 96 { 255 } else { 0 } } else { v as u8 };
             }
         }
     }
