@@ -197,12 +197,13 @@ impl Game {
         let g = &s.gfx;
         let lvl = |v: u8| ["LOW", "MEDIUM", "HIGH"][v.min(2) as usize].to_string();
         vec![
-            ("INTERNAL RESOLUTION".into(), format!("{}P", g.internal_height)),
+            ("INTERNAL RESOLUTION".into(), if g.scene_height() < g.internal_height { format!("{}P ({}P)", g.internal_height, g.scene_height()) } else { format!("{}P", g.internal_height) }),
             ("SHADOWS".into(), ["OFF", "LOW", "HIGH"][g.shadow_quality.min(2) as usize].into()),
             ("FOG QUALITY".into(), lvl(g.fog_quality)),
             ("PARTICLE DENSITY".into(), lvl(g.particle_density)),
             ("V-SYNC".into(), if g.vsync { "ON" } else { "OFF" }.into()),
             ("WINDOW MODE".into(), format!("{:?}", g.window_mode).to_uppercase()),
+            ("RETRO FILTER".into(), crate::render::FILTER_NAMES[g.filter.min(3) as usize].into()),
             ("MASTER VOLUME".into(), format!("{:.0}%", s.master * 100.0)),
             ("MUSIC VOLUME".into(), format!("{:.0}%", s.music * 100.0)),
             ("MOUSE SENSITIVITY".into(), format!("{:.2}", s.bindings.mouse_sens)),
@@ -232,12 +233,13 @@ impl Game {
                 let i = m.iter().position(|x| *x == g.window_mode).unwrap_or(0) as i32;
                 g.window_mode = m[(i + dir).rem_euclid(3) as usize];
             }
-            6 => s.master = (s.master + 0.1 * dir as f32).clamp(0.0, 1.0),
-            7 => s.music = (s.music + 0.1 * dir as f32).clamp(0.0, 1.0),
-            8 => s.bindings.mouse_sens = (s.bindings.mouse_sens + 0.1 * dir as f32).clamp(0.1, 4.0),
-            9 => s.bindings.pad_sens = (s.bindings.pad_sens + 0.1 * dir as f32).clamp(0.1, 4.0),
-            10 => s.bindings.invert_y = !s.bindings.invert_y,
-            11 => s.fov = (s.fov + 5.0 * dir as f32).clamp(55.0, 100.0),
+            6 => g.filter = cyc(g.filter, 4),
+            7 => s.master = (s.master + 0.1 * dir as f32).clamp(0.0, 1.0),
+            8 => s.music = (s.music + 0.1 * dir as f32).clamp(0.0, 1.0),
+            9 => s.bindings.mouse_sens = (s.bindings.mouse_sens + 0.1 * dir as f32).clamp(0.1, 4.0),
+            10 => s.bindings.pad_sens = (s.bindings.pad_sens + 0.1 * dir as f32).clamp(0.1, 4.0),
+            11 => s.bindings.invert_y = !s.bindings.invert_y,
+            12 => s.fov = (s.fov + 5.0 * dir as f32).clamp(55.0, 100.0),
             _ => s.shake = (s.shake + 0.25 * dir as f32).clamp(0.0, 1.5),
         }
         self.settings_dirty = true;

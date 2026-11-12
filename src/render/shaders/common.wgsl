@@ -20,6 +20,7 @@ struct Globals {
     distort2: array<vec4<f32>, 8>,   // strength, swirl
     key_vp: array<mat4x4<f32>, 6>,   // shadow-casting point light faces
     key: vec4<f32>,                  // xyz, enabled
+    post: vec4<f32>,                 // retro filter, window w, window h, unused
 };
 @group(0) @binding(0) var<uniform> G: Globals;
 

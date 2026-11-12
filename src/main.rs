@@ -171,6 +171,11 @@ impl ApplicationHandler for App {
                                 *m = if *m == WindowMode::Windowed { WindowMode::Borderless } else { WindowMode::Windowed };
                                 run.game.settings_dirty = true;
                             }
+                            KeyCode::F10 => {
+                                let f = &mut run.game.settings.gfx.filter;
+                                *f = (*f + 1) % 4;
+                                run.game.settings_dirty = true;
+                            }
                             KeyCode::F12 => run.r.capture = Some(format!("strain_{}.ppm", run.game.sim_time as u64).into()),
                             _ => {}
                         }

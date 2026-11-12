@@ -60,6 +60,14 @@ fn zoo_next(g: &mut Game) {
     }
 }
 
+static FILTER_CLOCK: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+fn set_filter(g: &mut Game, f: u8) {
+    g.settings.gfx.filter = f;
+    g.settings.gfx.internal_height = 540;
+    g.settings_dirty = true;
+}
+
 pub enum Step {
     Wait(u32),
     Hold(Action, u32),
@@ -182,6 +190,36 @@ impl AutoTest {
                     v.push(Shot(name));
                 }
                 v.push(Log("zoo done"));
+                v
+            }
+            "filters" => {
+                // the same street under each retro filter, with the time 60 frames take
+                let mut v = vec![
+                    Wait(10),
+                    Do(|g| {
+                        std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                        g.new_game();
+                        g.tod = 0.78;
+                        let p = crate::world::chunk_center(1, (2, 2)) + Vec3::new(-24.5, 0.0, -10.0);
+                        teleport(g, p);
+                        g.cam.yaw = 0.4;
+                        g.spawn_archetype("brute", p + Vec3::new(-1.5, 0.0, 4.0), 2, 6, None);
+                        g.spawn_archetype("rusher", p + Vec3::new(1.2, 0.0, 5.0), 2, 6, None);
+                    }),
+                    Wait(30),
+                ];
+                for (k, name) in ["filter_none", "filter_trinitron", "filter_camcorder", "filter_32bit"].into_iter().enumerate() {
+                    v.push(Do([|g: &mut Game| set_filter(g, 0), |g: &mut Game| set_filter(g, 1), |g: &mut Game| set_filter(g, 2), |g: &mut Game| set_filter(g, 3)][k]));
+                    v.push(Wait(20));
+                    v.push(Do(|_| *FILTER_CLOCK.lock().unwrap() = Some(std::time::Instant::now())));
+                    v.push(Wait(60));
+                    v.push(Do(|g| {
+                        let t = FILTER_CLOCK.lock().unwrap().take().map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0);
+                        eprintln!("autotest: filter {} ({}p): 60 frames in {:.2} s, {:.1} ms/frame", crate::render::FILTER_NAMES[g.settings.gfx.filter as usize], g.settings.gfx.scene_height(), t, t / 60.0 * 1000.0);
+                    }));
+                    v.push(Shot(name));
+                }
+                v.push(Log("filters done"));
                 v
             }
             "roam" => vec![
