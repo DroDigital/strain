@@ -3,6 +3,8 @@
 @group(1) @binding(2) var t_shadow: texture_depth_2d;
 @group(1) @binding(3) var s_shadow: sampler_comparison;
 @group(1) @binding(4) var t_key: texture_depth_2d;
+@group(1) @binding(5) var t_atlas: texture_2d<f32>;
+@group(3) @binding(0) var t_joints: texture_2d<f32>;
 @group(2) @binding(0) var<uniform> KF: mat4x4<f32>;
 
 struct VIn {
@@ -39,8 +41,73 @@ fn world_pos(in: VIn) -> vec3<f32> {
     return w;
 }
 
+/// Skinned vertex: the same inputs plus joints and weights.
+struct SIn {
+    @location(0) pos: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec3<f32>,
+    @location(3) color: vec4<f32>,
+    @location(4) m0: vec4<f32>,
+    @location(5) m1: vec4<f32>,
+    @location(6) m2: vec4<f32>,
+    @location(7) icol: vec4<f32>,
+    @location(8) ipar: vec4<f32>,
+    @location(9) joints: vec4<u32>,
+    @location(10) weights: vec4<f32>,
+};
+
+/// Joint matrices live in a float texture, three texels (rows) per matrix, 256 per row.
+fn joint_mat(i: u32) -> mat4x4<f32> {
+    let x = i32((i % 256u) * 3u);
+    let y = i32(i / 256u);
+    let r0 = textureLoad(t_joints, vec2<i32>(x, y), 0);
+    let r1 = textureLoad(t_joints, vec2<i32>(x + 1, y), 0);
+    let r2 = textureLoad(t_joints, vec2<i32>(x + 2, y), 0);
+    return mat4x4<f32>(
+        vec4<f32>(r0.x, r1.x, r2.x, 0.0),
+        vec4<f32>(r0.y, r1.y, r2.y, 0.0),
+        vec4<f32>(r0.z, r1.z, r2.z, 0.0),
+        vec4<f32>(r0.w, r1.w, r2.w, 1.0));
+}
+
+fn skinned(in: SIn) -> VIn {
+    let base = u32(max(in.ipar.x, 0.0));
+    let m = joint_mat(base + in.joints.x) * in.weights.x + joint_mat(base + in.joints.y) * in.weights.y
+          + joint_mat(base + in.joints.z) * in.weights.z + joint_mat(base + in.joints.w) * in.weights.w;
+    var v: VIn;
+    v.pos = (m * vec4<f32>(in.pos, 1.0)).xyz;
+    v.normal = (m * vec4<f32>(in.normal, 0.0)).xyz;
+    v.uv = in.uv;
+    v.color = in.color;
+    v.m0 = in.m0;
+    v.m1 = in.m1;
+    v.m2 = in.m2;
+    v.icol = in.icol;
+    v.ipar = vec4<f32>(-1.0, in.ipar.y, in.ipar.z, in.ipar.w);
+    return v;
+}
+
 @vertex
 fn vs_main(in: VIn) -> VOut {
+    return vs_body(in);
+}
+
+@vertex
+fn vs_skin(in: SIn) -> VOut {
+    return vs_body(skinned(in));
+}
+
+@vertex
+fn vs_skin_shadow(in: SIn) -> @builtin(position) vec4<f32> {
+    return G.shadow_vp * vec4<f32>(world_pos(skinned(in)), 1.0);
+}
+
+@vertex
+fn vs_skin_key(in: SIn) -> @builtin(position) vec4<f32> {
+    return KF * vec4<f32>(world_pos(skinned(in)), 1.0);
+}
+
+fn vs_body(in: VIn) -> VOut {
     var out: VOut;
     let w = world_pos(in);
     var clip = G.view_proj * vec4<f32>(w, 1.0);
@@ -98,7 +165,9 @@ fn key_shadow(wp: vec3<f32>) -> f32 {
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let uv = mix(in.uv, in.uvw.xy / in.uvw.z, G.screen.w);
-    let tex = textureSample(t_array, s_array, uv, i32(in.par.x + 0.5));
+    let arr = textureSample(t_array, s_array, uv, i32(min(in.par.x, 250.0) + 0.5));
+    let atl = textureSample(t_atlas, s_array, in.uv);
+    let tex = select(arr, atl, in.par.x > 250.0);
     if (tex.a < 0.5) { discard; }
     if (in.par.z > 0.0 && hash21(floor(uv * 24.0) + floor(in.wpos.xz * 3.0)) < in.par.z) { discard; }
     var albedo = tex.rgb * in.color.rgb;
@@ -144,7 +213,9 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     }
     let luma = dot(tex.rgb, vec3<f32>(0.3, 0.5, 0.2));
     let emis = albedo * in.color.a * 4.0 * smoothstep(0.25, 0.7, luma + in.color.a * 0.2);
-    var col = albedo * light + emis + spec * (puddle * 0.9 + wet * 0.08);
+    // rim light keeps silhouettes readable in fog and darkness
+    let rim = pow(1.0 - max(dot(n, V), 0.0), 3.0);
+    var col = albedo * light + emis + spec * (puddle * 0.9 + wet * 0.08) + albedo * rim * (G.fog_col.rgb * 1.5 + G.ambient.rgb * 0.6);
     col = mix(col, vec3<f32>(3.0, 3.0, 3.0), in.par.y);
     return vec4<f32>(col, 1.0);
 }

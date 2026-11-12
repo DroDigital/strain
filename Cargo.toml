@@ -8,6 +8,7 @@ version = "0.1.0"
 edition = "2021"
 description = "STRAIN - a third-person action game about a compatible host in an infected city"
 license = "MIT"
+build = "build.rs"
 
 [dependencies]
 wgpu = "30"
@@ -20,6 +21,8 @@ serde = { version = "1", features = ["derive"] }
 ron = "0.12"
 directories = "6"
 fastrand = "2"
+gltf = { version = "1", default-features = false, features = ["utils", "names"] }
+png = "0.18"
 
 [profile.release]
 opt-level = 3

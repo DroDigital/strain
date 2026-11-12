@@ -5,6 +5,7 @@ pub mod camera;
 pub mod combat;
 pub mod comp;
 pub mod cutscene;
+pub mod debris;
 pub mod draw;
 pub mod life;
 pub mod loot;
@@ -92,6 +93,7 @@ pub struct Labels {
 
 pub struct Game {
     pub t: Tables,
+    pub lib: std::sync::Arc<crate::render::model::Library>,
     pub w: World,
     pub area: Area,
     pub player: Entity,
@@ -188,13 +190,19 @@ pub struct Game {
     pub spell_test: usize,
     pub pending_ending: f32,
     pub bot_stop_on_death: bool,
+    pub bug_steps: u32,
+    pub bug_yaw: f32,
+    /// ground decals: (model id, transform, seconds left)
+    pub decals: Vec<(u32, glam::Mat4, f32)>,
+    pub debris: Vec<debris::Debris>,
+    pub bug_debris: Vec<Vec3>,
     pub build_start: std::time::Instant,
     pub build_ms: f32,
     pub prof_acc: (f32, f32, u32),
 }
 
 impl Game {
-    pub fn new(t: Tables, settings: Settings, audio: Audio, adapter: String) -> Game {
+    pub fn new(t: Tables, settings: Settings, audio: Audio, adapter: String, lib: std::sync::Arc<crate::render::model::Library>) -> Game {
         let seed = 0x5eed_1234;
         let gear = player::starting_gear(&t, &mut Rng::with_seed(1));
         let mut g = Game {
@@ -292,9 +300,15 @@ impl Game {
             spell_test: 0,
             pending_ending: 0.0,
             bot_stop_on_death: false,
+            bug_steps: 0,
+            bug_yaw: 0.0,
+            decals: Vec::new(),
+            debris: Vec::new(),
+            bug_debris: Vec::new(),
             build_start: std::time::Instant::now(),
             build_ms: 0.0,
             t,
+            lib,
         };
         g.make_player();
         g.pl.compute(&g.t);
@@ -311,6 +325,7 @@ impl Game {
         self.w.actor.insert(e, a);
         self.w.rig.insert(e, Rig::new(player::player_plan(&self.t, &self.pl)));
         self.player = e;
+        self.apply_skin(e);
     }
 
     // ---- small feedback helpers ------------------------------------------------------------
@@ -339,6 +354,21 @@ impl Game {
             self.floats.push((p, s.to_string(), c, 1.0));
         }
     }
+    /// Leave a blood splat on the ground.
+    pub fn blood_decal(&mut self, p: Vec3, size: f32, ichor: bool) {
+        let name = ["Blood_1", "Blood_2", "Blood_3"][self.rng.usize(0..3)];
+        if let Some(&id) = self.lib.static_id.get(name) {
+            let yaw = self.rng.f32() * std::f32::consts::TAU;
+            let y = self.area.ground(p.x, p.z) + 0.01 + self.decals.len() as f32 * 0.0004;
+            let m = glam::Mat4::from_scale_rotation_translation(glam::Vec3::new(size, 1.0, size), glam::Quat::from_rotation_y(yaw), glam::Vec3::new(p.x, y, p.z));
+            let _ = ichor;
+            self.decals.push((id, m, 60.0));
+            if self.decals.len() > 90 {
+                self.decals.remove(0);
+            }
+        }
+    }
+
     pub fn shake(&mut self, k: f32) {
         self.cam.trauma = (self.cam.trauma + k).min(1.0);
     }
@@ -663,6 +693,10 @@ impl Game {
                 self.pl.last_hit_target = None;
             }
         }
+        for d in &mut self.decals {
+            d.2 -= dt;
+        }
+        self.decals.retain(|d| d.2 > 0.0);
         for x in &mut self.tethers_fx {
             x.2 -= dt;
         }
@@ -750,6 +784,7 @@ impl Game {
             a.rally = 1.0;
             a.glow = (a.glow - dt * 2.0).max(0.0);
         }
+        self.sanitize_handles();
         self.rebuild_hash();
         self.player_tick(dt);
         self.ai_tick(dt);
@@ -760,6 +795,7 @@ impl Game {
         self.zones_tick(dt);
         self.status_tick(dt);
         self.pickups_tick(dt);
+        self.debris_tick(dt);
         self.echo_tick(dt);
         self.progress_tick();
         self.life_tick(dt);
@@ -771,6 +807,44 @@ impl Game {
         }
         self.w.flush();
         self.noises.clear();
+    }
+
+    /// Drop stored entity handles whose entity has been despawned (ids are reused).
+    fn sanitize_handles(&mut self) {
+        let alive = |w: &World, e: Option<Entity>| e.filter(|e| w.alive(*e));
+        let ids: Vec<u32> = self.w.ai.ids().collect();
+        for id in ids {
+            let e = self.w.ent(id);
+            let t = self.w.ai.get(e).and_then(|a| a.target);
+            if t.is_some() && alive(&self.w, t).is_none() {
+                self.w.ai.get_mut(e).unwrap().target = None;
+            }
+        }
+        let ids: Vec<u32> = self.w.proj.ids().collect();
+        for id in ids {
+            let e = self.w.ent(id);
+            let (h, o) = self.w.proj.get(e).map(|p| (p.homing, p.owner)).unwrap();
+            let (h, o) = (alive(&self.w, h), alive(&self.w, o));
+            let p = self.w.proj.get_mut(e).unwrap();
+            p.homing = h;
+            p.owner = o;
+        }
+        let ids: Vec<u32> = self.w.zone.ids().collect();
+        for id in ids {
+            let e = self.w.ent(id);
+            let o = self.w.zone.get(e).and_then(|z| z.owner);
+            let o = alive(&self.w, o);
+            self.w.zone.get_mut(e).unwrap().owner = o;
+        }
+        self.pl.lock = alive(&self.w, self.pl.lock);
+        self.boss = alive(&self.w, self.boss);
+        if let Some((e, _)) = self.pl.last_hit_target {
+            if !self.w.alive(e) {
+                self.pl.last_hit_target = None;
+            }
+        }
+        let w = &self.w;
+        self.speech.retain(|s| w.alive(s.0));
     }
 
     fn rebuild_hash(&mut self) {

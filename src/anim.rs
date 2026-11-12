@@ -168,6 +168,8 @@ pub struct Rig {
     pub head: Vec3,
     pub chest: Vec3,
     pub weapon_tip: Vec3,
+    /// glTF model driving this body (None = fully procedural)
+    pub skin: Option<SkinRig>,
 }
 
 fn v(r: f32, u: f32, f: f32) -> Vec3 {
@@ -213,6 +215,25 @@ fn ik(root: Vec3, target: &mut Vec3, l1: f32, l2: f32, pole: Vec3) -> Vec3 {
     root + dir * a + side.normalize_or_zero() * h
 }
 
+#[derive(Clone, Copy)]
+struct GrowthCtx {
+    root: Mat4,
+    head_c: Vec3,
+    hq: Quat,
+    hs: f32,
+    chest_c: Vec3,
+    tq: Quat,
+    th: f32,
+    hip: Vec3,
+    hip_h: f32,
+    s: f32,
+    time: f32,
+    glow_e: f32,
+    skin: [f32; 3],
+    extra_strike: f32,
+    dt: f32,
+}
+
 struct Emit<'a> {
     out: &'a mut InstList,
     flash: f32,
@@ -252,8 +273,14 @@ impl Rig {
             head: Vec3::ZERO,
             chest: Vec3::ZERO,
             weapon_tip: Vec3::ZERO,
+            skin: None,
             plan,
         }
+    }
+
+    /// True while any foot is mid-step.
+    pub fn stepping(&self) -> bool {
+        self.feet.iter().any(|f| f.t < 1.0)
     }
 
     fn chain(&mut self, idx: &mut usize, n: usize, seg: f32) -> usize {
@@ -622,7 +649,7 @@ impl Rig {
                 let k = smooth(f.t);
                 f.pos = f.from.lerp(f.to, k) + Vec3::Y * ((k * PI).sin() * 0.16 * s);
             } else {
-                let d = (f.pos - home_w).length();
+                let d = Vec3::new(f.pos.x - home_w.x, 0.0, f.pos.z - home_w.z).length();
                 let thresh = if moving { 0.32 * ll } else { 0.12 * ll } * if spider { 0.8 } else { 1.0 };
                 let other = any_stepping_group[(i + 1) % 2];
                 if d > thresh && (!other || d > thresh * 2.5) {
@@ -630,7 +657,7 @@ impl Rig {
                     f.to = home_w;
                     f.t = 0.0;
                 }
-                f.pos.y = 0.0_f32.max(f.pos.y - dt * 3.0).max(0.0);
+                f.pos.y = if f.pos.y > pos.y { (f.pos.y - dt * 3.0).max(pos.y) } else { pos.y };
             }
             let mut foot_l = flat_inv.transform_point3(self.feet[i].pos);
             let wf = |q: Vec3| root.transform_point3(q);
@@ -660,6 +687,13 @@ impl Rig {
         self.init = true;
 
         // ---- growths
+        let skin = self.plan.skin;
+        self.emit_growths(&mut e, &mut chain_i, &GrowthCtx { root, head_c, hq, hs, chest_c, tq, th, hip, hip_h, s, time, glow_e, skin, extra_strike: pose.extra_strike, dt });
+    }
+
+    fn emit_growths(&mut self, e: &mut Emit, chain_i: &mut usize, c: &GrowthCtx) {
+        let GrowthCtx { root, head_c, hq, hs, chest_c, tq, th, hip, hip_h, s, time, glow_e, skin, extra_strike, dt } = *c;
+        let pose = Pose { extra_strike, ..Default::default() };
         let growths = self.plan.growths.clone();
         let glowc = self.plan.glow;
         for (gi, g) in growths.iter().enumerate() {
@@ -731,7 +765,7 @@ impl Rig {
                 GrowthKind::Fronds | GrowthKind::Tail => {
                     let count = if g.kind == GrowthKind::Tail { 1 } else { 3 };
                     for k in 0..count {
-                        let ci = self.chain(&mut chain_i, if g.kind == GrowthKind::Tail { 7 } else { 5 }, 0.16 * gs);
+                        let ci = self.chain(chain_i, if g.kind == GrowthKind::Tail { 7 } else { 5 }, 0.16 * gs);
                         let o = root.transform_point3(at + q * Vec3::new((k as f32 - 1.0) * 0.1 * gs, 0.0, 0.0));
                         let d = root.transform_vector3(q * Vec3::new((k as f32 - 1.0) * 0.5, 1.0, 0.0)).normalize_or_zero();
                         let wave = Vec3::new((time * 2.0 + k as f32 * 2.0).sin(), 0.0, (time * 1.7 + k as f32).cos()) * 0.02;
@@ -858,5 +892,394 @@ pub fn weapon_tint(class: WeaponClass, seed: u32) -> [f32; 3] {
         WeaponClass::BoneBlade => [1.0, 0.95, 0.85],
         WeaponClass::Whip => [0.9, 0.5, 0.6],
         _ => [k, k, k * 1.02],
+    }
+}
+
+// =================================================================================================
+// Skinned characters: glTF models with animation clips, plus procedural layers on top.
+
+use crate::render::model::{Library, Pose as SkelPose};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SkinKind {
+    Human,
+    Zombie,
+    Dog,
+}
+
+/// A clip reference: (model index in the library, clip index).
+type ClipRef = (usize, usize);
+
+#[derive(Clone, Debug)]
+pub struct SkinRig {
+    pub model: usize,
+    pub skin_id: u32,
+    pub kind: SkinKind,
+    /// multiplies the model's normalised 1.75 m height
+    pub scale: f32,
+    pub tint: [f32; 3],
+    /// joints collapsed to hide body parts replaced by procedural growths
+    pub hide: Vec<usize>,
+    /// crawl instead of walking (larvae, ribcage crawlers)
+    pub crawl: bool,
+    /// a firearm held two-handed (soldiers)
+    pub gun: bool,
+    cur: Option<(ClipRef, f32)>,
+    prev: Option<(ClipRef, f32)>,
+    fade: f32,
+    hold_last: bool,
+}
+
+/// Name lookups resolved once per model.
+fn find_clip(lib: &Library, model: usize, names: &[&str]) -> Option<ClipRef> {
+    let donors = ["Zombie_Basic", "Characters_Matt_SingleWeapon"];
+    for n in names {
+        if let Some(c) = lib.models[model].clip(n) {
+            return Some((model, c));
+        }
+    }
+    for d in donors {
+        if let Some(&di) = lib.index.get(d) {
+            for n in names {
+                if let Some(c) = lib.models[di].clip(n) {
+                    return Some((di, c));
+                }
+            }
+        }
+    }
+    None
+}
+
+impl SkinRig {
+    pub fn new(lib: &Library, model: &str, kind: SkinKind) -> Option<SkinRig> {
+        let mi = *lib.index.get(model)?;
+        let skin_id = *lib.skin_id.get(model)?;
+        Some(SkinRig { model: mi, skin_id, kind, scale: 1.0, tint: [1.0; 3], hide: Vec::new(), crawl: false, gun: false, cur: None, prev: None, fade: 1.0, hold_last: false })
+    }
+    pub fn hide_joint(&mut self, lib: &Library, name: &str) {
+        if let Some(j) = lib.models[self.model].skeleton.find(name) {
+            if !self.hide.contains(&j) {
+                self.hide.push(j);
+            }
+        }
+    }
+    fn set(&mut self, c: Option<ClipRef>, t: f32) {
+        let same = self.cur.map(|x| x.0) == c;
+        match c {
+            Some(cr) if !same => {
+                if let Some(old) = self.cur {
+                    self.prev = Some(old);
+                    self.fade = 0.0;
+                }
+                self.cur = Some((cr, t));
+            }
+            Some(cr) => self.cur = Some((cr, t)),
+            None => {}
+        }
+    }
+}
+
+/// Phase 0..3 of an attack mapped onto a clip: wind-up to the hit frame, the swing, recovery.
+fn attack_time(ph: f32, dur: f32) -> f32 {
+    let hit = 0.42;
+    if ph < 1.0 {
+        ph * hit * dur
+    } else if ph < 2.0 {
+        (hit + (ph - 1.0) * 0.18) * dur
+    } else {
+        ((hit + 0.18) + (ph - 2.0) * (1.0 - hit - 0.18)) * dur
+    }
+}
+
+const MIDDLE_R: &str = "Middle1.L";
+const MIDDLE_L: &str = "Middle1.R";
+
+impl Rig {
+    /// Animate and emit a skinned character. Returns false if the rig has no skin.
+    #[allow(clippy::too_many_arguments)]
+    pub fn emit_skinned(&mut self, lib: &Library, dt: f32, pos: Vec3, yaw: f32, vel: Vec3, pose: &Pose, out: &mut InstList) -> bool {
+        let Some(mut sk) = self.skin.take() else { return false };
+        let model = &lib.models[sk.model];
+        let skel = &model.skeleton;
+        self.time += dt;
+        let time = self.time;
+        let speed = Vec3::new(vel.x, 0.0, vel.z).length();
+        let height = (model.max.y - model.min.y).max(0.5);
+        let s = self.plan.scale * sk.scale * 1.75 / height;
+
+        // ---- choose the clip
+        let clip = |names: &[&str]| find_clip(lib, sk.model, names);
+        let dur = |c: Option<ClipRef>| c.map(|(m, i)| lib.models[m].clips[i].duration).unwrap_or(1.0);
+        let mut hold = false;
+        let (c, t): (Option<ClipRef>, f32) = if pose.dead > 0.0 {
+            hold = true;
+            let c = clip(&["Death"]);
+            (c, (pose.dead * dur(c)).min(dur(c) - 0.01))
+        } else if let Some((sw, ph, _left)) = pose.swing {
+            let names: &[&str] = match (sk.kind, sw) {
+                (SkinKind::Dog, _) => &["Attack"],
+                (_, Swing::Shoot) => &["Idle_Gun"],
+                (SkinKind::Human, Swing::Thrust | Swing::Charge | Swing::Bash) => &["Stab", "Punch"],
+                (SkinKind::Human, Swing::Claw | Swing::Bite | Swing::Lash) => &["Punch"],
+                (SkinKind::Human, _) => &["Slash", "Punch"],
+                (SkinKind::Zombie, Swing::Leap | Swing::Charge) => &["Run_Attack", "Punch"],
+                (SkinKind::Zombie, Swing::Spit | Swing::Bite) => &["Idle_Attack", "Punch"],
+                (SkinKind::Zombie, Swing::Overhead | Swing::Slam) => &["Idle_Attack", "Punch"],
+                (SkinKind::Zombie, _) => &["Punch", "Idle_Attack"],
+            };
+            let c = clip(names);
+            (c, attack_time(ph, dur(c)))
+        } else if pose.roll > 0.0 {
+            let c = clip(&["Duck", "Crawl", "Idle"]);
+            (c, 0.25 * dur(c))
+        } else if pose.stagger > 0.0 {
+            let c = clip(if sk.kind == SkinKind::Dog { &["HitReact_Left"] } else { &["HitReact"] });
+            (c, (1.0 - pose.stagger) * dur(c) * 0.9)
+        } else if pose.cast > 0.0 {
+            let c = clip(&["Punch"]);
+            (c, (0.15 + pose.cast * 0.25) * dur(c))
+        } else if pose.block > 0.0 {
+            // fists or weapon raised: the opening frame of a punch is a guard
+            let c = clip(&["Punch"]);
+            (c, 0.12 * dur(c))
+        } else if pose.heal > 0.0 || pose.cower > 0.3 || pose.hide > 0.3 {
+            let c = clip(&["Duck", "Crawl", "Idle"]);
+            (c, 0.45 * dur(c))
+        } else {
+            let crawl = sk.crawl;
+            let (names, rate): (&[&str], f32) = if crawl {
+                (&["Crawl"], (speed / 1.2).max(0.3))
+            } else if speed < 0.25 {
+                (if sk.gun { &["Idle_Gun", "Idle"] } else { &["Idle"] }, 1.0)
+            } else if speed < 2.9 {
+                (if sk.gun { &["Walk_Gun", "Walk"] } else { &["Walk"] }, speed / 1.5)
+            } else {
+                (if sk.gun { &["Run_Gun", "Run"] } else { &["Run"] }, speed / (4.2 * s.max(0.5)))
+            };
+            let c = clip(names);
+            let prev_t = sk.cur.filter(|x| Some(x.0) == c).map(|x| x.1).unwrap_or(0.0);
+            (c, (prev_t + dt * rate.clamp(0.2, 2.5)) % dur(c).max(0.01))
+        };
+        sk.hold_last = hold;
+        sk.set(c, t);
+        sk.fade = (sk.fade + dt / 0.16).min(1.0);
+        if let Some((pc, pt)) = sk.prev {
+            // keep the old clip moving while it fades out
+            let d = lib.models[pc.0].clips[pc.1].duration.max(0.01);
+            sk.prev = Some((pc, (pt + dt) % d));
+        }
+
+        // ---- sample the pose
+        let mut sp = SkelPose::rest(skel);
+        if let (Some((pc, pt)), true) = (sk.prev, sk.fade < 1.0) {
+            sp.sample(skel, &lib.models[pc.0].skeleton, &lib.models[pc.0].clips[pc.1], pt, 1.0);
+        }
+        if let Some((cc, ct)) = sk.cur {
+            let w = if sk.prev.is_some() { smooth(sk.fade) } else { 1.0 };
+            sp.sample(skel, &lib.models[cc.0].skeleton, &lib.models[cc.0].clips[cc.1], ct, w);
+        }
+        for &j in &sk.hide {
+            sp.s[j] = Vec3::splat(0.001);
+        }
+        let globals = sp.globals(skel);
+
+        // ---- procedural layers on the whole body: roll, collapse, recoil, stagger lean
+        let rot = Quat::from_rotation_y(yaw);
+        let pivot = Vec3::Y * 0.8 * s;
+        let mut body = Mat4::IDENTITY;
+        if pose.roll > 0.0 {
+            body = Mat4::from_translation(pivot) * Mat4::from_rotation_x(pose.roll * TAU) * Mat4::from_translation(-pivot);
+        }
+        if pose.charge > 0.0 {
+            body = body * Mat4::from_rotation_x(-pose.charge * 0.25);
+        }
+        if pose.hide > 0.0 {
+            body = Mat4::from_translation(Vec3::Y * -0.3 * pose.hide * s) * body;
+        }
+        let world = Mat4::from_translation(pos) * Mat4::from_quat(rot) * body * Mat4::from_scale(Vec3::splat(s));
+
+        // ---- palette
+        let base = out.joints.len();
+        for (g, j) in globals.iter().zip(&skel.joints) {
+            let m = (*g * j.inverse_bind).transpose().to_cols_array();
+            out.joints.push([m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]]);
+        }
+        let tint = sk.tint;
+        let mut inst = Instance::new(world, [tint[0], tint[1], tint[2], pose.glow * 0.15], base as f32);
+        inst.params[1] = pose.flash;
+        inst.params[3] = pose.dissolve;
+        if base + skel.joints.len() <= crate::render::MAX_JOINTS {
+            out.skinned.push((sk.skin_id, inst));
+        }
+
+        // ---- anchors from bones
+        let bone = |name: &str| skel.find(name).map(|j| world * globals[j]);
+        let bp = |name: &str, fallback: Vec3| bone(name).map(|m| m.transform_point3(Vec3::ZERO)).unwrap_or(fallback);
+        let up = Vec3::Y;
+        let fwd = rot * Vec3::Z;
+        let head = bp("Head", pos + up * 1.6 * s);
+        let torso = bp("Torso", pos + up * 1.2 * s);
+        let hips = bp("Hips", pos + up * 0.9 * s);
+        self.head = head + up * 0.1 * s;
+        self.chest = torso;
+        let hr = bone(MIDDLE_R);
+        let hl = bone(MIDDLE_L);
+        self.hand_r = hr.map(|m| m.transform_point3(Vec3::ZERO)).unwrap_or(torso + rot * Vec3::new(-0.3, -0.2, 0.3));
+        self.hand_l = hl.map(|m| m.transform_point3(Vec3::ZERO)).unwrap_or(torso + rot * Vec3::new(0.3, -0.2, 0.3));
+        self.weapon_tip = self.hand_r + fwd * 0.3;
+
+        let mut e = Emit { out, flash: pose.flash, dissolve: pose.dissolve };
+        // ---- held weapons: model meshes where the kit has one, procedural otherwise
+        let mut chain_i = 0usize;
+        let weapon_off = Mat4::from_rotation_translation(Quat::from_xyzw(0.43331832, 0.55688697, 0.43980914, 0.5555899), Vec3::new(0.0115709, 0.1046141, -0.0457764));
+        let gun_off = Mat4::from_rotation_translation(Quat::from_xyzw(0.43331832, 0.55688697, 0.43980914, 0.5555899), Vec3::new(0.0357486, 0.0454898, -0.0450469));
+        if sk.gun {
+            if let (Some(m), Some(&id)) = (hr, lib.static_id.get("Rifle")) {
+                let wm = m * gun_off;
+                e.out.push(id, Instance::new(wm, [1.0, 1.0, 1.0, 0.0], -1.0));
+                self.weapon_tip = wm.transform_point3(Vec3::new(0.0, 0.0, 0.0)) + fwd * 0.7 + up * 0.05;
+            }
+        }
+        for slot in 0..2 {
+            let Some(w) = self.plan.hands[slot] else { continue };
+            let hand_m = if slot == 0 { hr } else { hl };
+            let Some(hm) = hand_m else { continue };
+            let kit = match w.class {
+                WeaponClass::Knife => Some(("Knife", 1.0)),
+                WeaponClass::Baton => Some(("WoodenBat_Barbed", 0.8)),
+                WeaponClass::Pipe => Some(("WoodenBat_Saw", 1.0)),
+                WeaponClass::Cleaver => Some(("Axe", 0.75)),
+                WeaponClass::FireAxe => Some(("Axe", 1.15)),
+                WeaponClass::Sledge => Some(("WoodenBat_Barbed", 1.35)),
+                _ => None,
+            };
+            match kit.and_then(|(n, sc)| lib.static_id.get(n).map(|id| (*id, sc))) {
+                Some((id, sc)) => {
+                    let mut wm = hm * weapon_off * Mat4::from_scale(Vec3::splat(sc));
+                    if slot == 1 {
+                        wm = hm * Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)) * weapon_off * Mat4::from_scale(Vec3::splat(sc));
+                    }
+                    e.out.push(id, Instance::new(wm, [w.tint[0], w.tint[1], w.tint[2], w.glow], -1.0));
+                    if slot == 0 || self.plan.hands[0].is_none() {
+                        self.weapon_tip = wm.transform_point3(Vec3::new(0.0, 0.6, 0.0));
+                    }
+                }
+                None => {
+                    // procedural weapons (shields, bone blades, whips, catalysts) along the forearm
+                    let hand = hm.transform_point3(Vec3::ZERO);
+                    let elbow = bp(if slot == 0 { "LowerArm.L" } else { "LowerArm.R" }, self.chest);
+                    let fdir = (hand - elbow).normalize_or_zero();
+                    let swinging = pose.swing.is_some();
+                    let wd = if swinging { (fdir + fwd * 0.6).normalize_or_zero() } else { (fdir * 0.4 + up * 0.6 + fwd * 0.5).normalize_or_zero() };
+                    let tip = draw_weapon(&mut e, &mut self.chains, &mut chain_i, w, hand, wd, fdir, fwd, s * 0.9, dt, swinging, time, self.plan.glow);
+                    if slot == 0 || self.plan.hands[0].is_none() {
+                        self.weapon_tip = tip;
+                    }
+                }
+            }
+        }
+
+        // ---- growths anchored to bones (in a body frame at the character's position)
+        let root = Mat4::from_translation(pos) * Mat4::from_quat(rot);
+        let inv = root.inverse();
+        let head_l = inv.transform_point3(head);
+        let chest_l = inv.transform_point3(torso);
+        let hip_l = inv.transform_point3(hips);
+        let neck_l = inv.transform_point3(bp("Neck", torso + up * 0.2 * s));
+        let th = (neck_l.y - hip_l.y).max(0.2);
+        let hs = 0.24 * self.plan.head_size * s;
+        let lean = Quat::from_rotation_x(((chest_l - hip_l).z / th).clamp(-0.6, 0.6));
+        let skin = self.plan.skin;
+        let glow_e = pose.glow;
+        self.emit_growths(&mut e, &mut chain_i, &GrowthCtx { root, head_c: head_l + Vec3::Y * hs * 0.4, hq: lean, hs, chest_c: chest_l, tq: lean, th, hip: hip_l, hip_h: hip_l.y, s, time, glow_e, skin, extra_strike: pose.extra_strike, dt });
+
+        // procedural heads replacing a hidden model head
+        if sk.hide.iter().any(|&j| skel.joints[j].name == "Head") {
+            let hm = root * trs(head_l + Vec3::Y * hs * 0.2, lean, Vec3::splat(hs));
+            let p = &self.plan;
+            match p.head {
+                HeadKind::Bloom => {
+                    for i in 0..6 {
+                        let a = i as f32 / 6.0 * TAU + time * 0.2;
+                        let open = 0.7 + 0.25 * (time * 1.3 + i as f32).sin() + pose.glow * 0.4;
+                        e.put(Prim::Blade, hm * trs(Vec3::ZERO, Quat::from_rotation_y(a) * Quat::from_rotation_x(open), Vec3::new(0.7, 1.5, 0.7)), p.head_tex, skin, 0.0);
+                    }
+                    e.put(Prim::Sphere, hm * Mat4::from_scale(Vec3::splat(0.6)), Tex::GrowthGlow, p.glow, 0.9 + glow_e);
+                }
+                HeadKind::Cluster => {
+                    for i in 0..5 {
+                        let a = i as f32 * 2.4;
+                        let o = Vec3::new(a.cos() * 0.4, (i as f32 * 1.7).sin() * 0.35, a.sin() * 0.4);
+                        let pulse = 0.55 + 0.12 * (time * 2.0 + i as f32).sin();
+                        e.put(Prim::Sphere, hm * trs(o, Quat::IDENTITY, Vec3::splat(pulse)), if i % 2 == 0 { p.head_tex } else { Tex::Flesh }, if i % 2 == 0 { p.glow } else { skin }, if i % 2 == 0 { 0.8 + glow_e } else { 0.0 });
+                    }
+                }
+                HeadKind::Stalk => {
+                    let tip = head_l + lean * Vec3::new(0.0, hs * 2.2, hs * 0.6);
+                    e.limb(root.transform_point3(neck_l), root.transform_point3(tip), hs * 0.35, p.head_tex, skin, 0.0);
+                    e.put(Prim::Sphere, root * trs(tip, lean, Vec3::splat(hs * 0.8)), Tex::GrowthGlow, p.glow, 0.7 + glow_e);
+                }
+                HeadKind::Crown => {
+                    e.put(Prim::Cube, hm * Mat4::from_scale(Vec3::new(0.8, 1.0, 0.85)), p.head_tex, skin, 0.0);
+                    for i in 0..5 {
+                        let a = i as f32 / 5.0 * TAU;
+                        e.put(Prim::Spike, hm * trs(Vec3::new(a.cos() * 0.35, 0.45, a.sin() * 0.35), Quat::from_rotation_z(-a.cos() * 0.4) * Quat::from_rotation_x(a.sin() * 0.4), Vec3::new(0.2, 0.9, 0.2)), Tex::Bone, [1.0; 3], 0.0);
+                    }
+                }
+                _ => {
+                    // a split, glowing stump
+                    e.put(Prim::Spike, root * trs(neck_l, lean, Vec3::new(hs, hs * 0.9, hs)), Tex::Flesh, skin, 0.0);
+                    e.put(Prim::Sphere, root * trs(neck_l + Vec3::Y * hs * 0.6, lean, Vec3::splat(hs * 0.5)), Tex::Vein, p.glow, 0.6 + glow_e);
+                }
+            }
+        }
+        // mutated arms replacing hidden forearms
+        for (ai, arm) in self.plan.arms.clone().iter().enumerate().take(2) {
+            let bone_name = if arm.side > 0.0 { "LowerArm.L" } else { "LowerArm.R" };
+            let replaced = skel.find(bone_name).map(|j| sk.hide.contains(&j)).unwrap_or(false);
+            if !replaced {
+                continue;
+            }
+            let elbow = bp(bone_name, self.chest);
+            let reach = arm.len * s * 1.3;
+            let swing_out = pose.swing.map(|(_, ph, _)| if (1.0..2.0).contains(&ph) { 1.0 } else { 0.0 }).unwrap_or(0.0);
+            let dir = (fwd * (0.6 + swing_out) - up * (0.6 - swing_out * 0.5) + rot * Vec3::new(-arm.side * 0.2, 0.0, 0.0)).normalize_or_zero();
+            let th_a = arm.thick * s;
+            let tint = skin;
+            match arm.kind {
+                ArmKind::Tendril => {
+                    let ci = self.chain(&mut chain_i, 7, reach / 5.0);
+                    let tgt = elbow + dir * reach * (1.0 + swing_out * 2.0);
+                    self.chains[ci].step(elbow, dir, dt, 6.0, Some((tgt, if swing_out > 0.0 { 0.6 } else { 0.05 })));
+                    e.chain(&self.chains[ci], th_a * 1.6, arm.tex, tint, glow_e * 0.6);
+                    if ai == 0 {
+                        self.weapon_tip = *self.chains[ci].pts.last().unwrap();
+                    }
+                }
+                ArmKind::Blade => {
+                    e.limb(elbow, elbow + dir * reach * 0.4, th_a, Tex::Flesh, tint, 0.0);
+                    e.put(Prim::Blade, segment(elbow + dir * reach * 0.3, elbow + dir * reach * 1.4, 0.16 * s, 0.5 * s, Vec3::Y), Tex::Bone, [1.0; 3], glow_e);
+                }
+                ArmKind::Club => {
+                    e.limb(elbow, elbow + dir * reach * 0.6, th_a * 1.4, Tex::Flesh, tint, 0.0);
+                    e.put(Prim::Sphere, Mat4::from_translation(elbow + dir * reach * 0.75) * Mat4::from_scale(Vec3::splat(th_a * 3.4)), Tex::Bone, [0.9, 0.85, 0.8], glow_e);
+                }
+                ArmKind::Cannon => {
+                    e.put(Prim::Cyl, segment(elbow, elbow + dir * reach * 0.7, th_a * 2.0, th_a * 2.0, Vec3::Y), Tex::Flesh, skin, 0.0);
+                    e.put(Prim::Sphere, Mat4::from_translation(elbow + dir * reach * 0.7) * Mat4::from_scale(Vec3::splat(th_a * 1.7)), Tex::GrowthGlow, self.plan.glow, 0.8 + glow_e * 2.0);
+                }
+                _ => {
+                    e.limb(elbow, elbow + dir * reach * 0.6, th_a, arm.tex, tint, 0.0);
+                    for k in -1..=1 {
+                        let d = (dir + rot * Vec3::new(k as f32 * 0.35, -0.2, 0.2)).normalize();
+                        let h = elbow + dir * reach * 0.6;
+                        e.put(Prim::Spike, segment(h, h + d * 0.32 * s, 0.05 * s, 0.05 * s, Vec3::Z), Tex::Bone, [1.0; 3], glow_e);
+                    }
+                }
+            }
+        }
+        self.init = true;
+        self.skin = Some(sk);
+        true
     }
 }

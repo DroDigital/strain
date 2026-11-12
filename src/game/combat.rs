@@ -71,6 +71,29 @@ impl Game {
         best.map(|b| b.0)
     }
 
+    /// Soldiers who are hit by the player turn on them, and so does the rest of the squad.
+    pub fn anger_squad(&mut self, t: Entity) {
+        let Some(squad) = self.w.ai.get(t).map(|a| a.summons) else { return };
+        let p = self.w.body.get(t).map(|b| b.pos).unwrap_or(Vec3::ZERO);
+        let ids: Vec<u32> = self.w.ai.ids().collect();
+        for id in ids {
+            let e = self.w.ent(id);
+            let same = self.w.ai.get(e).map(|a| a.kind == AiKind::Soldier && (a.summons == squad || e == t)).unwrap_or(false);
+            let near = self.w.body.get(e).map(|b| (b.pos - p).length() < 30.0).unwrap_or(false);
+            if same && near {
+                let pe = self.player;
+                let ai = self.w.ai.get_mut(e).unwrap();
+                ai.grudge = (ai.grudge.max(0.0) + if e == t { 45.0 } else { 35.0 }).max(65.0);
+                ai.target = Some(pe);
+                ai.think = 0.0;
+            }
+        }
+        if self.pl.soldiers_angered == 0 {
+            self.msg("THE SQUAD TURNS ITS RIFLES ON YOU");
+        }
+        self.pl.soldiers_angered += 1;
+    }
+
     pub fn noise(&mut self, p: Vec3, r: f32) {
         self.noises.push((p, r));
     }
@@ -117,6 +140,17 @@ impl Game {
                     if a.active() {
                         self.resolve_melee(e);
                     }
+                    // swing trails behind the weapon during the strike
+                    if a.phase() > 0.85 && a.phase() < 2.15 && !matches!(mv.swing, Swing::Shoot | Swing::Spit) {
+                        if let Some(r) = self.w.rig.get(e) {
+                            let (tip, hand) = (r.weapon_tip, r.hand_r);
+                            let heavy = a.heavy || mv.dmg > 1.25;
+                            for k in 0..4 {
+                                let q = hand.lerp(tip, 0.4 + k as f32 * 0.2);
+                                self.parts.burst(Fx::Trail, q, Vec3::ZERO, 1, if heavy { 1.5 } else { 1.0 });
+                            }
+                        }
+                    }
                 }
                 ActKind::Rupture => {
                     if prev < 0.45 && a.t >= 0.45 {
@@ -162,7 +196,8 @@ impl Game {
                 let foe = self.w.ai.get(e).and_then(|ai| ai.target);
                 let tp = foe.and_then(|t| self.w.body.get(t)).map(|b| b.center()).unwrap_or(body.center() + fwd * 10.0);
                 let rig = self.w.rig.get(e);
-                let origin = rig.map(|r| if mv.swing == Swing::Shoot { r.weapon_tip } else { r.head }).unwrap_or(body.center());
+                // rig anchors are only refreshed while the actor is drawn; fall back when stale
+                let origin = rig.map(|r| if mv.swing == Swing::Shoot { r.weapon_tip } else { r.head }).filter(|o| (*o - body.center()).length() < 2.5).unwrap_or(body.center() + fwd * 0.5);
                 let dmg = self.w.actor.get(e).unwrap().dmg * mv.dmg;
                 let team = self.w.actor.get(e).unwrap().team;
                 if mv.swing == Swing::Shoot {
@@ -394,9 +429,7 @@ impl Game {
             }
         }
         if self.w.actor.get(t).map(|a| a.team == Team::Military).unwrap_or(false) {
-            if let Some(ai) = self.w.ai.get_mut(t) {
-                ai.grudge += 25.0;
-            }
+            self.anger_squad(t);
         }
         // hit-stop scaled by weight
         self.hitstop = self.hitstop.max(if a.heavy { 0.09 + a.charge * 0.05 } else { 0.05 });
@@ -586,6 +619,9 @@ impl Game {
         if !matches!(kind, DmgKind::Rot | DmgKind::Fire) || amount > 6.0 {
             self.parts.burst(blood, c, dir, (3.0 + amount * 0.25).min(18.0) as u32, 1.0);
             let heavy = matches!(kind, DmgKind::Heavy | DmgKind::Rupture) || amount > 30.0;
+            if heavy {
+                self.lights_temp.push((c, Vec3::new(2.2, 1.6, 1.2), 5.0, 0.07));
+            }
             self.audio.play_at(if heavy { Sfx::HitHeavy } else { Sfx::HitFlesh }, c, 0.7, rf(&mut self.rng, 0.85, 1.15));
             if matches!(kind, DmgKind::Melee | DmgKind::Heavy) {
                 self.parts.burst(Fx::Sparks, c, dir, 3, 0.6);
@@ -786,6 +822,7 @@ impl Game {
 
     /// Damage everything hostile to `team` in a radius.
     pub fn aoe(&mut self, p: Vec3, r: f32, dmg: f32, poise: f32, team: Team, src: Option<Entity>, kind: DmgKind) -> u32 {
+        self.debris_impulse(p, r * 1.3, 4.0 + poise * 0.08);
         let mut hits = Vec::new();
         self.hash.query(p, r, |id, bp, _| hits.push((id, bp)));
         let mut n = 0;
@@ -1119,6 +1156,7 @@ impl Game {
                         self.parts.burst(Fx::Fire, p + Vec3::Y * 0.3, Vec3::Y, 40, z.radius * 0.5);
                         self.parts.burst(Fx::Flash, p + Vec3::Y, Vec3::ZERO, 1, z.radius * 0.6);
                         self.parts.burst(Fx::Smoke, p, Vec3::ZERO, 8, 1.0);
+                        self.debris_impulse(p, z.radius * 1.8, 9.0);
                         self.audio.play_at(Sfx::Explode, p, 0.9, 0.9);
                         self.lights_temp.push((p + Vec3::Y * 2.0, Vec3::new(6.0, 3.0, 1.0), z.radius * 3.0, 0.25));
                         self.shake(0.5);
@@ -1286,6 +1324,8 @@ impl Game {
         let b = *self.w.body.get(e).unwrap();
         self.audio.play_at(Sfx::Death, b.pos, 0.6, rf(&mut self.rng, 0.8, 1.3));
         self.parts.burst(if team == Team::Infected { Fx::Ichor } else { Fx::Blood }, b.center(), Vec3::Y, 24, 1.6);
+        let sz = self.w.rig.get(e).map(|r| r.plan.scale).unwrap_or(1.0) * crate::util::rf(&mut self.rng, 0.5, 0.9);
+        self.blood_decal(b.pos, sz, team == Team::Infected);
         if self.pl.lock == Some(e) {
             self.pl.lock = None;
         }

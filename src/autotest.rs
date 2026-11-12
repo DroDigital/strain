@@ -14,6 +14,8 @@ pub enum Step {
     Log(&'static str),
     /// let a simple combat bot play for n frames
     Bot(u32),
+    /// roam the streets for n frames, checking for stuck/embedded/NaN states
+    Roam(u32),
 }
 
 pub struct AutoTest {
@@ -23,6 +25,18 @@ pub struct AutoTest {
     dir: String,
     held: Option<Action>,
     frames: u64,
+    roam: RoamStats,
+}
+
+#[derive(Default)]
+pub struct RoamStats {
+    last: Vec3,
+    streak: u32,
+    max_streak: u32,
+    stuck_events: u32,
+    embedded: u32,
+    nan: u32,
+    teleports: u32,
 }
 
 fn teleport(g: &mut Game, p: Vec3) {
@@ -36,6 +50,135 @@ impl AutoTest {
         use Step::*;
         let steps: Vec<Step> = match name.as_str() {
             "title" => vec![Wait(40), Shot("title")],
+            "look" => vec![
+                Wait(10),
+                Do(|g| {
+                    std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                    g.new_game();
+                    g.tod = 0.45;
+                    let p = crate::world::chunk_center(1, (2, 2)) + Vec3::new(-24.5, 0.0, -10.0);
+                    teleport(g, p);
+                    g.cam.yaw = 0.0;
+                }),
+                Wait(20),
+                Do(|g| { g.cam.dist = 2.6; g.cam.pitch = 0.15; }),
+                Wait(10),
+                Shot("player_back"),
+                Do(|g| { g.cam.yaw = std::f32::consts::PI; }),
+                Wait(10),
+                Shot("player_front"),
+                Do(|g| {
+                    g.cam.dist = 4.4;
+                    g.cam.yaw = 0.0;
+                    let p = g.ppos();
+                    let kinds = ["rusher", "brute", "leaper", "spitter", "crawler", "shielded", "ambusher", "summoner"];
+                    for (k, id) in kinds.iter().enumerate() {
+                        let e = g.spawn_archetype(id, p + Vec3::new(k as f32 * 1.6 - 5.6, 0.0, 7.0), 1 + (k % 3) as u8, 6, None);
+                        if let Some(b) = g.w.body.get_mut(e) { b.yaw = std::f32::consts::PI; }
+                        if let Some(ai) = g.w.ai.get_mut(e) { ai.cd = 99.0; ai.think = 99.0; }
+                    }
+                    for k in 0..3 {
+                        let e = g.spawn_soldier(p + Vec3::new(k as f32 * 1.4 - 1.4, 0.0, 11.0), 5, 3);
+                        if let Some(b) = g.w.body.get_mut(e) { b.yaw = std::f32::consts::PI; }
+                    }
+                    for k in 0..2 {
+                        let e = g.spawn_civilian(p + Vec3::new(k as f32 * 1.4 + 3.0, 0.0, 11.0));
+                        if let Some(b) = g.w.body.get_mut(e) { b.yaw = std::f32::consts::PI; }
+                    }
+                }),
+                Wait(30),
+                Shot("lineup"),
+                Hold(Action::MoveF, 40),
+                Shot("walking"),
+                Tap(Action::Light),
+                Wait(9),
+                Shot("attack"),
+                Wait(30),
+                Do(|g| g.enter_rift(0)),
+                Do(|g| {
+                    let (c, _) = g.area.arena;
+                    g.place_player(c + Vec3::new(0.0, 0.0, -9.0));
+                }),
+                Wait(40),
+                Shot("boss_look"),
+                Log("look done"),
+            ],
+            "roam" => vec![
+                Wait(10),
+                Do(|g| {
+                    std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                    g.new_game();
+                    let pe = g.player;
+                    if let Some(a) = g.w.actor.get_mut(pe) { a.max_hp = 1e6; a.hp = 1e6; }
+                }),
+                Roam(3600),
+                Shot("roam_end"),
+                Log("roam done"),
+            ],
+            "bugs" => vec![
+                Wait(10),
+                Do(|g| {
+                    std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                    g.new_game();
+                    // stand on a raised sidewalk
+                    let p = crate::world::chunk_center(0, (3, 2)) + Vec3::new(-20.0, 0.12, -20.0);
+                    teleport(g, p);
+                    g.bug_steps = 0;
+                }),
+                Wait(30),
+                Do(|g| g.bug_steps = 0),
+                Wait(120),
+                Do(|g| eprintln!("autotest: idle on kerb y={:.2}: frames spent stepping {} of 120", g.ppos().y, g.bug_steps)),
+                Shot("idle"),
+                Do(|g| {
+                    let y0 = g.cam.yaw;
+                    g.bug_yaw = y0;
+                }),
+                Do(|g| {
+                    let pp = g.ppos();
+                    let before = g.cam.view().inverse().x_axis.truncate();
+                    g.cam.update(1.0 / 60.0, glam::Vec2::new(0.3, 0.0), false, pp, None, &g.area, 0.0);
+                    let fwd_after = (g.cam.target - g.cam.eye).normalize();
+                    // turning right means the new forward leans toward the old screen-right
+                    eprintln!("autotest: mouse right turns view right: {} (dot {:.2})", fwd_after.dot(before) > 0.0, fwd_after.dot(before));
+                }),
+                Do(|g| {
+                    let p = g.ppos();
+                    let pe = g.player;
+                    let mut first = None;
+                    for k in 0..3 {
+                        let s = g.spawn_soldier(p + Vec3::new(k as f32 * 1.5, 0.0, 12.0), 77, 3);
+                        first.get_or_insert(s);
+                    }
+                    g.anger_squad(first.unwrap());
+                    if let Some(a) = g.w.actor.get_mut(pe) { a.max_hp = 2000.0; a.hp = 2000.0; }
+                    // look away so the soldiers are off screen
+                    g.cam.yaw = std::f32::consts::PI;
+                }),
+                Wait(300),
+                Do(|g| eprintln!("autotest: player hp after 10 s of hostile soldiers: {:.0}/2000", g.w.actor.get(g.player).unwrap().hp)),
+                Shot("soldiers"),
+                Do(|g| {
+                    let p = g.ppos();
+                    let near: Vec<Vec3> = g.debris.iter().filter(|d| (d.pos - p).length() < 12.0).map(|d| d.pos).collect();
+                    g.bug_debris = near.clone();
+                    eprintln!("autotest: debris in city {}, within 12 m {}", g.debris.len(), near.len());
+                    if let Some(q) = near.first() {
+                        let mut z = g.make_zone(*q, crate::game::comp::ZoneKind::Blast, 3.0, 0.0, 0.5, crate::game::comp::Team::Player, None);
+                        z.delay = 0.1;
+                        g.add_zone(*q, z);
+                    }
+                }),
+                Wait(40),
+                Do(|g| {
+                    let moved = g.debris.iter().filter(|d| g.bug_debris.iter().any(|q| (*q - d.pos).length() > 0.3 && (*q - d.pos).length() < 15.0)).count();
+                    eprintln!("autotest: debris moved by the blast: {moved}");
+                }),
+                Do(|g| { g.cam.pitch = 0.05; }),
+                Wait(10),
+                Shot("floor"),
+                Log("bugs done"),
+            ],
             "duel" => vec![
                 Wait(10),
                 Do(|g| {
@@ -411,7 +554,7 @@ impl AutoTest {
                 Log("autotest complete"),
             ],
         };
-        Some(AutoTest { steps, i: 0, t: 0, dir, held: None, frames: 0 })
+        Some(AutoTest { steps, i: 0, t: 0, dir, held: None, frames: 0, roam: RoamStats::default() })
     }
 
     /// Advance the script by one frame. Returns true when finished.
@@ -426,7 +569,7 @@ impl AutoTest {
         let Some(s) = self.steps.get(self.i) else { return true };
         let mut next = true;
         for a in [Action::MoveF, Action::MoveB, Action::MoveL, Action::MoveR, Action::Block, Action::Light, Action::Dodge, Action::Heal, Action::LockOn, Action::UiAccept] {
-            if !matches!(s, Step::Bot(_)) {
+            if !matches!(s, Step::Bot(_) | Step::Roam(_)) {
                 break;
             }
             input.inject(a, false);
@@ -455,6 +598,14 @@ impl AutoTest {
             }
             Step::Do(f) => f(g),
             Step::Log(m) => eprintln!("autotest: {m} after {} frames", self.frames),
+            Step::Roam(n) => {
+                roam(g, input, self.t, &mut self.roam);
+                self.t += 1;
+                next = self.t >= *n;
+                if next {
+                    eprintln!("autotest: roam: teleports {} stuck events {} embedded frames {} max stuck streak {} nan {} panics none, deaths {}", self.roam.teleports, self.roam.stuck_events, self.roam.embedded, self.roam.max_streak, self.roam.nan, g.prof.deaths);
+                }
+            }
             Step::Bot(n) => {
                 bot(g, input, self.t);
                 self.t += 1;
@@ -558,4 +709,60 @@ fn bot(g: &mut Game, input: &mut Input, t: u32) {
         }
     }
     let _ = t;
+}
+
+fn roam(g: &mut Game, input: &mut Input, t: u32, st: &mut RoamStats) {
+    use crate::physics::Statics;
+    if g.screen != Screen::None {
+        input.inject(Action::UiAccept, true);
+        if g.screen == Screen::Dead && g.dead_t > 3.0 {
+            g.respawn();
+        }
+        g.screen = if g.screen == Screen::LevelUp || g.screen == Screen::Dead { g.screen } else { Screen::None };
+        return;
+    }
+    // new random street position every 15 s, rotating through districts
+    if t % 450 == 0 {
+        let d = (t / 450) as usize % 6;
+        let mut r = crate::util::Rng::with_seed(t as u64);
+        let local = (r.i32(0..6), r.i32(0..6));
+        let c = crate::world::chunk_center(d, local);
+        let p = c + Vec3::new(-24.5, 0.0, r.f32() * 40.0 - 20.0);
+        g.rebuild_city(p);
+        st.teleports += 1;
+        st.last = g.ppos();
+        st.streak = 0;
+        return;
+    }
+    if t % 90 == 0 {
+        g.cam.yaw += 1.3 + (t as f32 * 0.37).sin();
+    }
+    input.inject(Action::MoveF, true);
+    if t % 40 == 0 {
+        input.inject(Action::Dodge, true);
+    }
+    let p = g.ppos();
+    if !p.is_finite() {
+        st.nan += 1;
+    }
+    let b = g.player_body();
+    if g.area.blocked(p, b.radius * 0.6) {
+        st.embedded += 1;
+        if st.embedded % 30 == 1 {
+            eprintln!("autotest: roam: embedded in geometry at {:?}", p);
+        }
+    }
+    let moved = (p - st.last).length();
+    st.last = p;
+    if moved < 0.01 && g.w.actor.get(g.player).map(|a| a.act.kind == crate::game::comp::ActKind::Idle).unwrap_or(false) {
+        st.streak += 1;
+        if st.streak == 60 {
+            st.stuck_events += 1;
+            // turn to get free, like a player would
+            g.cam.yaw += 2.0;
+        }
+        st.max_streak = st.max_streak.max(st.streak);
+    } else {
+        st.streak = 0;
+    }
 }

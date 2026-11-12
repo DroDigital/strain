@@ -2,11 +2,13 @@
 //! sun shadow map, GPU-instanced meshes and particles, volumetric fog + bloom + distortion +
 //! ordered-dither post, fixed internal resolution upscaled to the window, UI overlay.
 pub mod mesh;
+pub mod model;
 pub mod textures;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Vec3};
 use mesh::{Instance, MeshBuilder, MeshRange, Vertex};
+use model::SkinVertex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use textures::{Tex, TEX};
@@ -30,7 +32,7 @@ pub struct GfxSettings {
 }
 impl Default for GfxSettings {
     fn default() -> Self {
-        GfxSettings { internal_height: 480, shadow_quality: 2, fog_quality: 1, particle_density: 1, vsync: true, window_mode: WindowMode::Windowed }
+        GfxSettings { internal_height: 540, shadow_quality: 2, fog_quality: 1, particle_density: 1, vsync: true, window_mode: WindowMode::Windowed }
     }
 }
 impl GfxSettings {
@@ -155,12 +157,17 @@ pub struct StaticMesh {
 #[derive(Default)]
 pub struct InstList {
     pub buckets: Vec<Vec<Instance>>,
+    /// skinned draws: (skin id, instance with params[0] = palette base)
+    pub skinned: Vec<(u32, Instance)>,
+    pub joints: Vec<[f32; 12]>,
 }
 impl InstList {
     pub fn clear(&mut self) {
         for b in &mut self.buckets {
             b.clear();
         }
+        self.skinned.clear();
+        self.joints.clear();
     }
     #[inline]
     pub fn push(&mut self, mesh: u32, inst: Instance) {
@@ -189,7 +196,16 @@ pub struct Frame<'a> {
     /// shadow-casting point light (position, radius); must be lights[0]
     pub key: Option<(Vec3, f32)>,
     pub key_statics: Vec<&'a StaticMesh>,
+    /// skinned characters: (skinned mesh index, instance with params[0] = joint palette base)
+    pub skinned: &'a [(u32, Instance)],
+    /// joint palette, 3 rows of an affine matrix per joint
+    pub joints: &'a [[f32; 12]],
 }
+
+/// Joint palette texture: 256 matrices (768 texels) per row.
+const JOINT_TEX_W: u32 = 768;
+const JOINT_TEX_H: u32 = 128;
+pub const MAX_JOINTS: usize = (JOINT_TEX_W / 3 * JOINT_TEX_H) as usize;
 
 struct Targets {
     w: u32,
@@ -228,6 +244,17 @@ pub struct Renderer {
     key_face_buf: wgpu::Buffer,
     key_face_bg: wgpu::BindGroup,
     p_key: wgpu::RenderPipeline,
+    p_skin: wgpu::RenderPipeline,
+    p_skin_shadow: wgpu::RenderPipeline,
+    p_skin_key: wgpu::RenderPipeline,
+    joint_tex: wgpu::Texture,
+    joints_bg: wgpu::BindGroup,
+    skin_vb: Option<wgpu::Buffer>,
+    skin_ib: Option<wgpu::Buffer>,
+    skin_ranges: Vec<MeshRange>,
+    skin_inst_buf: wgpu::Buffer,
+    skin_inst_cap: u64,
+    atlas_view: wgpu::TextureView,
     targets: Targets,
     p_scene: wgpu::RenderPipeline,
     p_shadow: wgpu::RenderPipeline,
@@ -258,6 +285,7 @@ const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const LDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const KEY_FACE: u32 = 512;
+const TEX_MIPS: u32 = 7;
 
 fn tex_entry(binding: u32, ty: wgpu::BindingType) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::FRAGMENT, ty, count: None }
@@ -351,7 +379,7 @@ impl Renderer {
         use wgpu::TextureViewDimension as D;
         let l_scene = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene"),
-            entries: &[tex_entry(0, bt_tex(D::D2Array, false)), tex_entry(1, bt_samp(false)), tex_entry(2, bt_tex(D::D2, true)), tex_entry(3, bt_samp(true)), tex_entry(4, bt_tex(D::D2, true))],
+            entries: &[tex_entry(0, bt_tex(D::D2Array, false)), tex_entry(1, bt_samp(false)), tex_entry(2, bt_tex(D::D2, true)), tex_entry(3, bt_samp(true)), tex_entry(4, bt_tex(D::D2, true)), tex_entry(5, bt_tex(D::D2, false))],
         });
         let l_post = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("post"),
@@ -436,6 +464,62 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        // ---- skinned characters
+        let l_joints = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("joints"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: false }, view_dimension: D::D2, multisampled: false },
+                count: None,
+            }],
+        });
+        let sattrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Unorm8x4, 9 => Uint16x4, 10 => Float32x4];
+        let svbl = || wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<SkinVertex>() as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &sattrs };
+        let sibl = || wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Instance>() as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &iattrs };
+        let pl_skin = pl(&[Some(&l_g0), Some(&l_scene), None, Some(&l_joints)]);
+        let pl_skin_shadow = pl(&[Some(&l_g0), None, None, Some(&l_joints)]);
+        let pl_skin_key = pl(&[Some(&l_g0), None, Some(&l_kf), Some(&l_joints)]);
+        let p_skin = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("skin"),
+            layout: Some(&pl_skin),
+            vertex: wgpu::VertexState { module: &sh_scene, entry_point: Some("vs_skin"), compilation_options: Default::default(), buffers: &[Some(svbl()), Some(sibl())] },
+            primitive: prim_state(true, false),
+            depth_stencil: depth_state(true, 0),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState { module: &sh_scene, entry_point: Some("fs_main"), compilation_options: Default::default(), targets: &[Some(HDR.into())] }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let skin_depth = |layout: &wgpu::PipelineLayout, entry: &str, label: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState { module: &sh_scene, entry_point: Some(entry), compilation_options: Default::default(), buffers: &[Some(svbl()), Some(sibl())] },
+                primitive: prim_state(false, false),
+                depth_stencil: depth_state(true, 2),
+                multisample: Default::default(),
+                fragment: None,
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let p_skin_shadow = skin_depth(&pl_skin_shadow, "vs_skin_shadow", "skin shadow");
+        let p_skin_key = skin_depth(&pl_skin_key, "vs_skin_key", "skin key");
+        let joint_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("joints"),
+            size: wgpu::Extent3d { width: JOINT_TEX_W, height: JOINT_TEX_H, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let joint_view = joint_tex.create_view(&Default::default());
+        let joints_bg = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &l_joints, entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&joint_view) }] });
+        let skin_inst_cap = 256 * std::mem::size_of::<Instance>() as u64;
+        let skin_inst_buf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("skin inst"), size: skin_inst_cap, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let key_face_buf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("key faces"), size: 256 * 6, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let key_face_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
@@ -527,7 +611,7 @@ impl Renderer {
         let samp_linear = samp(wgpu::FilterMode::Linear, false, false);
         let samp_shadow = samp(wgpu::FilterMode::Linear, false, true);
 
-        let mips = 5;
+        let mips = TEX_MIPS;
         let tex_array = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("tex array"),
             size: wgpu::Extent3d { width: TEX as u32, height: TEX as u32, depth_or_array_layers: Tex::Count as u32 },
@@ -551,7 +635,24 @@ impl Renderer {
             mapped_at_creation: false,
         });
         let g0 = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &l_g0, entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals_buf.as_entire_binding() }] });
-        let g1_scene = Self::scene_bg(&device, &l_scene, &tex_view, &samp_nearest_rep, &shadow_view, &samp_shadow, &key_view);
+        let atlas = crate::assets::image("models/atlas.png").unwrap_or(crate::assets::Image { w: 1, h: 1, px: vec![255; 4] });
+        let atlas_tex = device.create_texture_with_data(
+            &queue,
+            &wgpu::TextureDescriptor {
+                label: Some("model atlas"),
+                size: wgpu::Extent3d { width: atlas.w as u32, height: atlas.h as u32, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &atlas.px,
+        );
+        let atlas_view = atlas_tex.create_view(&Default::default());
+        let g1_scene = Self::scene_bg(&device, &l_scene, &tex_view, &samp_nearest_rep, &shadow_view, &samp_shadow, &key_view, &atlas_view);
 
         // UI atlas
         let ui_tex = device.create_texture_with_data(
@@ -609,6 +710,17 @@ impl Renderer {
             key_face_buf,
             key_face_bg,
             p_key,
+            p_skin,
+            p_skin_shadow,
+            p_skin_key,
+            joint_tex,
+            joints_bg,
+            skin_vb: None,
+            skin_ib: None,
+            skin_ranges: Vec::new(),
+            skin_inst_buf,
+            skin_inst_cap,
+            atlas_view,
             targets,
             p_scene,
             p_shadow,
@@ -644,7 +756,8 @@ impl Renderer {
         }
     }
 
-    fn scene_bg(device: &wgpu::Device, l: &wgpu::BindGroupLayout, tex: &wgpu::TextureView, s: &wgpu::Sampler, shadow: &wgpu::TextureView, ss: &wgpu::Sampler, key: &wgpu::TextureView) -> wgpu::BindGroup {
+    #[allow(clippy::too_many_arguments)]
+    fn scene_bg(device: &wgpu::Device, l: &wgpu::BindGroupLayout, tex: &wgpu::TextureView, s: &wgpu::Sampler, shadow: &wgpu::TextureView, ss: &wgpu::Sampler, key: &wgpu::TextureView, atlas: &wgpu::TextureView) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: l,
@@ -654,6 +767,7 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(shadow) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(ss) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(key) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(atlas) },
             ],
         })
     }
@@ -727,7 +841,7 @@ impl Renderer {
         if old.shadow_quality != s.shadow_quality {
             self.shadow_size = Self::shadow_px(s);
             self.shadow_view = make_tex(&self.device, self.shadow_size, self.shadow_size, DEPTH, "shadow").1;
-            self.g1_scene = Self::scene_bg(&self.device, &self.l_scene, &self.tex_view, &self.samp_nearest_rep, &self.shadow_view, &self.samp_shadow, &self.key_view);
+            self.g1_scene = Self::scene_bg(&self.device, &self.l_scene, &self.tex_view, &self.samp_nearest_rep, &self.shadow_view, &self.samp_shadow, &self.key_view, &self.atlas_view);
         }
         self.rebuild_targets();
     }
@@ -748,7 +862,7 @@ impl Renderer {
     pub fn upload_layer(&mut self, layer: Tex) {
         let mut data = textures::generate(layer);
         let mut size = TEX;
-        for mip in 0..5u32 {
+        for mip in 0..TEX_MIPS {
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo { texture: &self.tex_array, mip_level: mip, origin: wgpu::Origin3d { x: 0, y: 0, z: layer as u32 }, aspect: wgpu::TextureAspect::All },
                 &data,
@@ -758,6 +872,22 @@ impl Renderer {
             data = textures::downsample(&data, size);
             size /= 2;
         }
+    }
+
+    /// Upload every skinned model into one buffer; returns nothing, draws refer to the model index.
+    pub fn upload_skinned(&mut self, models: &[(Vec<SkinVertex>, Vec<u32>)]) {
+        let (mut verts, mut idx, mut ranges) = (Vec::new(), Vec::new(), Vec::new());
+        for (v, i) in models {
+            ranges.push(MeshRange { first: idx.len() as u32, count: i.len() as u32, base: verts.len() as i32 });
+            verts.extend_from_slice(v);
+            idx.extend_from_slice(i);
+        }
+        if idx.is_empty() {
+            return;
+        }
+        self.skin_vb = Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("skin vb"), contents: bytemuck::cast_slice(&verts), usage: wgpu::BufferUsages::VERTEX }));
+        self.skin_ib = Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("skin ib"), contents: bytemuck::cast_slice(&idx), usage: wgpu::BufferUsages::INDEX }));
+        self.skin_ranges = ranges;
     }
 
     pub fn upload_mesh(&self, mb: &MeshBuilder) -> Option<StaticMesh> {
@@ -820,9 +950,9 @@ impl Renderer {
         g.fog_col = e.fog_col.extend(e.fog_density).into();
         let steps = [6.0, 12.0, 24.0][self.settings.fog_quality.min(2) as usize];
         g.fog_par = [e.fog_height, steps, 110.0, e.light_scatter];
-        g.screen = [t.w as f32, t.h as f32, 1.0, 0.05];
+        g.screen = [t.w as f32, t.h as f32, 1.0, 0.0];
         g.grade = e.grade.extend(e.saturation).into();
-        g.fx = [e.levels, e.dither, e.vignette, e.strain];
+        g.fx = [e.levels * 2.0, e.dither, e.vignette, e.strain];
         let nl = f.lights.len().min(32);
         let nd = f.distorts.len().min(8);
         g.counts = [nl as f32, nd as f32, e.fade, e.flash];
@@ -866,6 +996,26 @@ impl Renderer {
         let isz = std::mem::size_of::<Instance>() as u64;
         Self::ensure(&self.device, &mut self.inst_buf, &mut self.inst_cap, self.inst_scratch.len() as u64 * isz);
         self.queue.write_buffer(&self.inst_buf, 0, bytemuck::cast_slice(&self.inst_scratch));
+        // skinned instances and the joint palette
+        let ns = f.skinned.len();
+        if ns > 0 {
+            let insts: Vec<Instance> = f.skinned.iter().map(|s| s.1).collect();
+            Self::ensure(&self.device, &mut self.skin_inst_buf, &mut self.skin_inst_cap, ns as u64 * isz);
+            self.queue.write_buffer(&self.skin_inst_buf, 0, bytemuck::cast_slice(&insts));
+            let nj = f.joints.len().min(MAX_JOINTS);
+            if nj > 0 {
+                let per_row = (JOINT_TEX_W / 3) as usize;
+                let rows = nj.div_ceil(per_row);
+                let mut data = vec![[0.0f32; 12]; rows * per_row];
+                data[..nj].copy_from_slice(&f.joints[..nj]);
+                self.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo { texture: &self.joint_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                    bytemuck::cast_slice(&data),
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(JOINT_TEX_W * 16), rows_per_image: Some(rows as u32) },
+                    wgpu::Extent3d { width: JOINT_TEX_W, height: rows as u32, depth_or_array_layers: 1 },
+                );
+            }
+        }
         let np = f.particles.len() as u32;
         if np > 0 {
             Self::ensure(&self.device, &mut self.part_buf, &mut self.part_cap, np as u64 * std::mem::size_of::<ParticleInst>() as u64);
@@ -891,6 +1041,21 @@ impl Renderer {
                 rp.draw_indexed(r.first..r.first + r.count, r.base, *a..*b);
             }
         };
+        let skin_ok = ns > 0 && self.skin_vb.is_some();
+        let draw_skin = |rp: &mut wgpu::RenderPass| {
+            if !skin_ok {
+                return;
+            }
+            rp.set_bind_group(3, &self.joints_bg, &[]);
+            rp.set_vertex_buffer(0, self.skin_vb.as_ref().unwrap().slice(..));
+            rp.set_vertex_buffer(1, self.skin_inst_buf.slice(..));
+            rp.set_index_buffer(self.skin_ib.as_ref().unwrap().slice(..), wgpu::IndexFormat::Uint32);
+            for (i, (mesh, _)) in f.skinned.iter().enumerate() {
+                if let Some(r) = self.skin_ranges.get(*mesh as usize) {
+                    rp.draw_indexed(r.first..r.first + r.count, r.base, i as u32..i as u32 + 1);
+                }
+            }
+        };
         fn depth_att(v: &wgpu::TextureView) -> Option<wgpu::RenderPassDepthStencilAttachment<'_>> {
             Some(wgpu::RenderPassDepthStencilAttachment { view: v, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None })
         }
@@ -899,6 +1064,8 @@ impl Renderer {
             rp.set_pipeline(&self.p_shadow);
             rp.set_bind_group(0, &self.g0, &[]);
             draw_geo(&mut rp, &f.shadow_statics);
+            rp.set_pipeline(&self.p_skin_shadow);
+            draw_skin(&mut rp);
         }
         if key_on {
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor { label: Some("key shadow"), color_attachments: &[], depth_stencil_attachment: depth_att(&self.key_view), ..Default::default() });
@@ -909,7 +1076,10 @@ impl Renderer {
                 rp.set_viewport(x as f32, y as f32, KEY_FACE as f32, KEY_FACE as f32, 0.0, 1.0);
                 rp.set_scissor_rect(x, y, KEY_FACE, KEY_FACE);
                 rp.set_bind_group(2, &self.key_face_bg, &[face * 256]);
+                rp.set_pipeline(&self.p_key);
                 draw_geo(&mut rp, &f.key_statics);
+                rp.set_pipeline(&self.p_skin_key);
+                draw_skin(&mut rp);
             }
         }
         fn color_att(v: &wgpu::TextureView, clear: Option<Vec3>) -> Option<wgpu::RenderPassColorAttachment<'_>> {
@@ -937,6 +1107,8 @@ impl Renderer {
             rp.set_bind_group(0, &self.g0, &[]);
             rp.set_bind_group(1, &self.g1_scene, &[]);
             draw_geo(&mut rp, &f.statics);
+            rp.set_pipeline(&self.p_skin);
+            draw_skin(&mut rp);
             if np > 0 {
                 rp.set_pipeline(&self.p_particles);
                 rp.set_vertex_buffer(0, self.part_buf.slice(..));

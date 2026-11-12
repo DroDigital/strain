@@ -595,7 +595,7 @@ impl Game {
             ai.think -= dt;
             ai.t -= dt;
             ai.bark_cd -= dt;
-            ai.grudge = (ai.grudge - dt * 3.0).max(0.0);
+            ai.grudge = (ai.grudge - dt * 1.2).max(0.0);
         }
         let busy = self.w.actor.get(e).unwrap().act.busy();
         if busy {
@@ -621,7 +621,10 @@ impl Game {
         }
         match ai.target {
             Some(t) => {
-                let tb = *self.w.body.get(t).unwrap();
+                let Some(tb) = self.w.body.get(t).copied() else {
+                    self.w.ai.get_mut(e).unwrap().target = None;
+                    return;
+                };
                 let to = flat(tb.pos - body.pos);
                 let dist = to.length();
                 let dirn = to.normalize_or_zero();
@@ -630,12 +633,13 @@ impl Game {
                     let mv = foe.attacks.iter().copied().find(|m| m.swing == Swing::Bash).unwrap();
                     self.begin_attack(e, mv);
                     self.w.ai.get_mut(e).unwrap().cd = 1.0;
-                } else if dist < 6.0 {
-                    self.steer(e, body.pos - dirn * 4.0, speed, Some(dirn), dt);
                 } else if dist < 24.0 && ai.cd <= 0.0 && self.area.line_of_sight(body.center() + Vec3::Y * 0.3, tb.center()) {
                     let mv = foe.attacks.iter().copied().find(|m| m.swing == Swing::Shoot).unwrap();
                     self.begin_attack(e, mv);
                     self.w.ai.get_mut(e).unwrap().cd = rf(&mut self.rng, 0.9, 1.8);
+                } else if dist < 6.0 {
+                    // keep distance between shots
+                    self.steer(e, body.pos - dirn * 4.0, speed, Some(dirn), dt);
                 } else if dist > 16.0 {
                     self.steer(e, tb.pos, speed, Some(dirn), dt);
                 } else {
