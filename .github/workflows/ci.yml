@@ -11,6 +11,10 @@ env:
 jobs:
   test:
     name: test (${{ matrix.os }})
+    # Branches in this repository are already tested by the push run; testing the same commit
+    # again for the pull request doubles the macOS jobs, and the second one can wait for a runner
+    # until it is cancelled. Pull requests from forks still run here.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       fail-fast: false
       matrix:
