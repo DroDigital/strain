@@ -148,7 +148,7 @@ fn fs_post(in: FsIn) -> @location(0) vec4<f32> {
         let radius = 0.75;
         let rpx = clamp(radius * G.screen.y * 0.71 / max(dist, 0.1), 3.0, 90.0);
         var occ = 0.0;
-        let a0 = jit * 6.2832;
+        let a0 = 0.7;
         for (var i = 0; i < 10; i = i + 1) {
             let fi = f32(i);
             let ang = a0 + fi * 2.39996;

@@ -294,7 +294,8 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     // sun / moon with a soft shadow map
     var sh = 1.0;
     if (G.cam_right.w > 0.5) {
-        sh = sun_shadow(in.wpos, ng, jit);
+        // a fixed kernel: with no temporal accumulation, per-pixel rotation reads as halftone noise
+        sh = sun_shadow(in.wpos, ng, 0.13);
     }
     var col = shade(s, G.sun_dir.xyz, G.sun_col.rgb * sh);
 

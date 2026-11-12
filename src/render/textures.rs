@@ -5,6 +5,7 @@
 //! linear material layer (R/G tangent-space normal, B roughness, A metalness) for the PBR shader.
 use crate::util::{fbm2, hash01, noise2};
 use glam::{Vec2, Vec3};
+use std::f32::consts::TAU;
 
 pub const TEX: usize = 512;
 
@@ -56,12 +57,17 @@ pub enum Tex {
     Grass,
     GutWall,
     Lattice,
+    /// neutral detail layers for the realistic character models: colour comes from the vertices
+    Leather,
+    Hair,
+    Denim,
     Count,
 }
 
 /// A photo texture from assets/textures, as linear-ish 0..1 RGB (sRGB values, as authored).
 struct Photo {
     px: Vec<[f32; 3]>,
+    mean_lum: f32,
     /// packed material map: normal x/y, roughness, ambient occlusion (0..1)
     mat: Vec<[f32; 4]>,
 }
@@ -76,7 +82,8 @@ impl Photo {
             Some(im) if im.w == TEX && im.h == TEX => im.px.chunks(4).map(|c| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, c[3] as f32 / 255.0]).collect(),
             _ => vec![[0.5, 0.5, 0.7, 1.0]; TEX * TEX],
         };
-        Photo { px, mat }
+        let mean_lum = px.iter().map(|c| c[0] * 0.3 + c[1] * 0.55 + c[2] * 0.15).sum::<f32>() / px.len().max(1) as f32;
+        Photo { px, mean_lum, mat }
     }
     fn mat_at(&self, x: usize, y: usize) -> [f32; 4] {
         self.mat[(y % TEX) * TEX + (x % TEX)]
@@ -205,6 +212,9 @@ fn surface(layer: Tex) -> (f32, f32, f32, f32) {
         Tex::Grass => (-1.0, 1.1, 0.0, 0.6),
         Tex::GutWall => (0.22, 1.0, 0.0, 1.3),
         Tex::Lattice => (0.2, 1.0, 0.6, 0.8),
+        Tex::Leather => (-1.0, 0.85, 0.0, 0.6),
+        Tex::Hair => (0.42, 1.0, 0.0, 1.4),
+        Tex::Denim => (-1.0, 1.1, 0.0, 0.7),
         Tex::Count => (0.6, 1.0, 0.0, 0.0),
     }
 }
@@ -237,7 +247,14 @@ pub fn generate(layer: Tex) -> (Vec<u8>, Vec<u8>) {
         Tex::Tile => Some(photo("tiles")),
         Tex::Poster | Tex::Sign => Some(photo("paper")),
         Tex::Grass => Some(photo("grass")),
+        Tex::Leather => Some(photo("leather")),
+        Tex::Denim => Some(photo("fabric_coarse")),
+        Tex::Hair => Some(photo("fabric")),
         _ => None,
+    };
+    // detail layers are normalised to a bright neutral grey so vertex colours set the hue
+    let detail = |p: &Option<Photo>, x: usize, y: usize| -> f32 {
+        p.as_ref().map(|p| p.lum(x, y) / p.mean_lum.max(0.05) * 0.8).unwrap_or(0.8)
     };
     for y in 0..TEX {
         for x in 0..TEX {
@@ -300,7 +317,7 @@ pub fn generate(layer: Tex) -> (Vec<u8>, Vec<u8>) {
                     mul(c, 0.6 + 0.8 * l)
                 }
                 Tex::Cloth => mul(grey(b), 1.35),
-                Tex::Skin => mul([0.85, 0.66, 0.55], 0.75 + 0.4 * l),
+                Tex::Skin => mul([0.85, 0.66, 0.55], 0.75 + 0.4 * (0.45 + (l - 0.45) * 0.4) + 0.06 * tfbm(u, v, 3.0, s)),
                 Tex::Flesh => {
                     let v1 = veins(u, v, 7.0, s + 2, 0.03);
                     mix(tint(mul(b, 1.4), [1.05, 0.38, 0.4]), [0.25, 0.04, 0.08], v1 * 0.7)
@@ -359,6 +376,22 @@ pub fn generate(layer: Tex) -> (Vec<u8>, Vec<u8>) {
                     let fold = ((v * 6.0 + tn(u, v, 4.0, s) * 2.0).fract() - 0.5).abs() * 2.0;
                     tint(mul(b, 0.6 + fold * 0.9), [1.1, 0.4, 0.45])
                 }
+                Tex::Leather => {
+                    // creased hide: the grain, plus scuffs that catch the light
+                    let k = detail(&base, x, y) * (0.9 + 0.2 * tfbm(u, v, 5.0, s));
+                    [k, k * 0.98, k * 0.95]
+                }
+                Tex::Denim => {
+                    let k = detail(&base, x, y) * (0.92 + 0.12 * tn(u, v, 24.0, s));
+                    [k, k, k]
+                }
+                Tex::Hair => {
+                    // fine strands running down the texture, clumped by low-frequency noise
+                    let clump = tn(u, v, 6.0, s);
+                    let strand = 0.5 + 0.5 * ((u * TAU * 96.0 + clump * 9.0 + tn(u, v, 3.0, s + 1) * 5.0).sin());
+                    let k = 0.8 * (0.62 + 0.38 * strand * (0.7 + 0.3 * tn(u, v, 32.0, s + 2)));
+                    [k, k, k]
+                }
                 Tex::Lattice => {
                     let g = (u * 4.0).fract() < 0.06 || (v * 4.0).fract() < 0.06;
                     if g { [0.6, 0.75, 1.0] } else { mul([0.05, 0.06, 0.14], 0.6 + n * 0.8) }
@@ -389,9 +422,17 @@ fn material(layer: Tex, albedo: &[u8], photo: Option<&Photo>) -> Vec<u8> {
             let gy = (lum(xm, yp) + 2.0 * lum(x, yp) + lum(xp, yp)) - (lum(xm, ym) + 2.0 * lum(x, ym) + lum(xp, ym));
             let pm = photo.map(|p| p.mat_at(x, y)).unwrap_or([0.5, 0.5, 0.7, 1.0]);
             // photo normals are OpenGL convention (+Y up the image); image rows run downward
-            let mut n = Vec3::new(pm[0] * 2.0 - 1.0, pm[1] * 2.0 - 1.0, 1.0);
-            n.x -= gx * bump * 0.9;
-            n.y += gy * bump * 0.9;
+            // body surfaces seen at arm's length: soften relief so a weave or grain never reads as a grid
+            let relief = match layer {
+                Tex::Skin => 0.3,
+                Tex::Cloth | Tex::Camo => 0.45,
+                Tex::Denim => 0.55,
+                Tex::Leather | Tex::Hair => 0.7,
+                _ => 1.0,
+            };
+            let mut n = Vec3::new((pm[0] * 2.0 - 1.0) * relief, (pm[1] * 2.0 - 1.0) * relief, 1.0);
+            n.x -= gx * bump * 0.9 * relief;
+            n.y += gy * bump * 0.9 * relief;
             let n = n.normalize();
             let rough = if rough_fix >= 0.0 { (rough_fix * (0.85 + 0.3 * pm[2])).min(1.0) } else { (pm[2] * rough_mul).clamp(0.04, 1.0) };
             let i = (y * TEX + x) * 4;
