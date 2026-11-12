@@ -128,8 +128,11 @@ impl Game {
             let yaw = angle_lerp(b.prev_yaw, b.yaw, alpha);
             let pose = self.pose_for(e, &a);
             let vel = b.vel + b.push;
+            let lib = self.lib.clone();
             if let Some(rig) = self.w.rig.get_mut(e) {
-                rig.update_emit(dt, pos, yaw, vel, &pose, &mut self.inst);
+                if !rig.emit_skinned(&lib, dt, pos, yaw, vel, &pose, &mut self.inst) {
+                    rig.update_emit(dt, pos, yaw, vel, &pose, &mut self.inst);
+                }
                 if e == self.player && rig.stepping() {
                     self.bug_steps += 1;
                 }
@@ -309,6 +312,28 @@ impl Game {
             self.inst.push(Prim::Cyl as u32, inst(segment(*a, *b, 0.5 + 0.1 * (t * 30.0).sin(), 0.5, Vec3::Y), Tex::RiftGlow, [1.0, 0.7, 1.0], 3.0));
         }
 
+        // ---- kit models placed by world generation
+        for c in self.area.chunks.values() {
+            for (name, m, tint) in &c.props {
+                let p = m.w_axis.truncate();
+                if (p - cam).length() > 120.0 {
+                    continue;
+                }
+                if let Some(&id) = self.lib.static_id.get(*name) {
+                    if visible(&vp, p - Vec3::splat(4.0), p + Vec3::new(4.0, 12.0, 4.0)) {
+                        self.inst.push(id, Instance::new(*m, *tint, -1.0));
+                    }
+                }
+            }
+        }
+        // blood pooled where things died
+        for (id, m, life) in &self.decals {
+            let mut i = Instance::new(*m, [0.55, 0.05, 0.06, 0.0], -1.0);
+            // fade out through dithered dissolve in the last seconds
+            i.params[3] = if *life < 3.0 { 1.0 - life / 3.0 } else { 0.0 };
+            self.inst.push(*id, i);
+        }
+
         // ---- animated world props
         let pp = self.ppos();
         let mut props = Vec::new();
@@ -451,6 +476,8 @@ impl Game {
             ui: &ui,
             key,
             key_statics,
+            skinned: &self.inst.skinned,
+            joints: &self.inst.joints,
         });
         self.ui_buf = ui;
         self.ui.hits = hits;

@@ -338,6 +338,18 @@ impl Game {
             volume: self.settings.master,
             music_volume: self.settings.music,
             muffle: if self.slowmo > 0.0 { 0.6 } else { 0.0 } + if self.screen.pauses() { 0.5 } else { 0.0 },
+            fire: {
+                let pp = self.ppos();
+                let mut best = 0.0f32;
+                for c in self.area.chunks.values() {
+                    for (p, k) in &c.emitters {
+                        if *k == EmitKind::Fire {
+                            best = best.max(1.0 - (*p - pp).length() / 14.0);
+                        }
+                    }
+                }
+                best.max(0.0)
+            },
         }
     }
 }

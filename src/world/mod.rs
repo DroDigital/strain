@@ -148,6 +148,8 @@ pub struct ChunkGen {
     pub interact: Vec<(Vec3, InteractKind)>,
     /// hazard zones baked into the area (pos, radius, kind index)
     pub hazards: Vec<(Vec3, f32, u8)>,
+    /// kit models placed in the chunk: (model name, transform, tint rgb + emissive)
+    pub props: Vec<(&'static str, glam::Mat4, [f32; 4])>,
 }
 
 pub struct Chunk {
@@ -161,6 +163,7 @@ pub struct Chunk {
     pub spawns: Vec<SpawnPt>,
     pub interact: Vec<(Vec3, InteractKind)>,
     pub hazards: Vec<(Vec3, f32, u8)>,
+    pub props: Vec<(&'static str, glam::Mat4, [f32; 4])>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -220,7 +223,7 @@ impl Area {
         (d * 0.5).clamp(0.0, 1.0) * KERB
     }
     fn make_chunk(g: ChunkGen) -> Chunk {
-        Chunk { mesh: None, pending: Some(g.mesh), cols: g.cols, lights: g.lights, emitters: g.emitters, anims: g.anims, spawns: g.spawns, interact: g.interact, hazards: g.hazards }
+        Chunk { mesh: None, pending: Some(g.mesh), cols: g.cols, lights: g.lights, emitters: g.emitters, anims: g.anims, spawns: g.spawns, interact: g.interact, hazards: g.hazards, props: g.props }
     }
     /// Load/unload city chunks around `center`. Generates at most `budget` chunks per call.
     /// Returns (newly loaded keys, unloaded keys).

@@ -262,10 +262,25 @@ impl Gen {
         }
     }
 
+    /// Place a kit model at local (x, z) on the ground with a yaw and scale.
+    fn prop(&mut self, name: &'static str, x: f32, z: f32, yaw: f32, scale: f32, tint: [f32; 4]) {
+        let y = self.g_h(x, z);
+        let m = trs(self.p(x, y, z), Quat::from_rotation_y(yaw), Vec3::splat(scale));
+        self.g.props.push((name, m, tint));
+    }
+    /// A prop with a collision box of half extents (hx, hz) and height h (axis aligned after yaw snapping).
+    fn prop_solid(&mut self, name: &'static str, x: f32, z: f32, yaw: f32, hx: f32, hz: f32, h: f32, tint: [f32; 4]) {
+        self.prop(name, x, z, yaw, 1.0, tint);
+        let swap = ((yaw / std::f32::consts::FRAC_PI_2).round() as i32).rem_euclid(2) == 1;
+        let (ex, ez) = if swap { (hz, hx) } else { (hx, hz) };
+        self.g.cols.push(Aabb::low(self.o + Vec3::new(x - ex, 0.0, z - ez), self.o + Vec3::new(x + ex, h, z + ez)));
+    }
+
     fn lamp(&mut self, x: f32, z: f32, ax: f32, az: f32) {
-        self.bx(Vec3::new(x - 0.08, KERB, z - 0.08), Vec3::new(x + 0.08, 6.0, z + 0.08), Tex::Metal, Tex::Metal, rgb(0.3, 0.3, 0.32), 0.0);
-        let (hx, hz) = (x + ax * 1.4, z + az * 1.4);
-        self.bx(Vec3::new(x.min(hx) - 0.06, 5.85, z.min(hz) - 0.06), Vec3::new(x.max(hx) + 0.06, 6.0, z.max(hz) + 0.06), Tex::Metal, Tex::Metal, rgb(0.3, 0.3, 0.32), 0.0);
+        // kit street light: pole at the origin, arm reaching 2.6 m along +z at ~6.4 m
+        let yaw = ax.atan2(az);
+        self.prop("StreetLights", x, z, yaw, 1.0, [0.8, 0.8, 0.82, 0.0]);
+        let (hx, hz) = (x + ax * 2.5, z + az * 2.5);
         self.g.cols.push(Aabb::low(self.o + Vec3::new(x - 0.12, 0.0, z - 0.12), self.o + Vec3::new(x + 0.12, 3.0, z + 0.12)));
         let dead = match self.state {
             DState::Held => 0.05,
@@ -273,26 +288,23 @@ impl Gen {
             DState::Lost => 0.9,
         };
         if !chance(&mut self.r, dead) {
-            self.bx(Vec3::new(hx - 0.25, 5.7, hz - 0.25), Vec3::new(hx + 0.25, 5.85, hz + 0.25), Tex::White, Tex::White, rgbe(1.0, 0.7, 0.3, 1.0), 0.0);
+            self.bx(Vec3::new(hx - 0.2, 6.2, hz - 0.2), Vec3::new(hx + 0.2, 6.28, hz + 0.2), Tex::White, Tex::White, rgbe(1.0, 0.7, 0.3, 1.0), 0.0);
             let fl = if chance(&mut self.r, 0.2) { 3 } else { 1 };
-            self.light(hx, 5.4, hz, [3.0, 1.75, 0.55], 17.0, fl);
+            self.light(hx, 5.9, hz, [3.0, 1.75, 0.55], 17.0, fl);
         }
     }
 
     fn car(&mut self, x: f32, z: f32, along_x: bool, burning: bool) {
-        let (l, w) = (4.2, 1.8);
-        let (dx, dz) = if along_x { (l, w) } else { (w, l) };
-        let hue = self.r.usize(0..5);
-        let c = if burning { rgb(0.12, 0.1, 0.1) } else { [rgb(0.5, 0.1, 0.1), rgb(0.15, 0.2, 0.4), rgb(0.6, 0.6, 0.62), rgb(0.1, 0.1, 0.12), rgb(0.5, 0.45, 0.2)][hue] };
+        let military = self.state != DState::Lost && chance(&mut self.r, if self.control > 0.6 { 0.35 } else { 0.08 });
+        let name = if military { *crate::util::pick(&mut self.r, &["Vehicle_Pickup_Armored", "Vehicle_Truck_Armored"]) } else { *crate::util::pick(&mut self.r, &["Vehicle_Pickup", "Vehicle_Sports", "Vehicle_Truck", "Vehicle_Pickup"]) };
+        let yaw = if along_x { std::f32::consts::FRAC_PI_2 } else { 0.0 } + if chance(&mut self.r, 0.5) { std::f32::consts::PI } else { 0.0 } + rf(&mut self.r, -0.12, 0.12);
+        let tint = if burning { [0.18, 0.15, 0.14, 0.0] } else if self.state == DState::Lost { [0.6, 0.55, 0.6, 0.0] } else { [rf(&mut self.r, 0.65, 1.0), rf(&mut self.r, 0.6, 0.95), rf(&mut self.r, 0.6, 1.0), 0.0] };
         let y = self.g_h(x, z);
-        self.bx(Vec3::new(x - dx / 2.0, y + 0.3, z - dz / 2.0), Vec3::new(x + dx / 2.0, y + 1.0, z + dz / 2.0), if burning { Tex::Char } else { Tex::Metal }, Tex::Metal, c, 0.0);
-        let (cx, cz) = if along_x { (l * 0.28, w * 0.45) } else { (w * 0.45, l * 0.28) };
-        self.bx(Vec3::new(x - cx, y + 1.0, z - cz), Vec3::new(x + cx, y + 1.55, z + cz), if burning { Tex::Char } else { Tex::Glass }, Tex::Metal, if burning { c } else { WHITE }, 0.0);
-        for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-            let (wx, wz) = (x + sx * dx * 0.33, z + sz * dz * 0.42);
-            self.bx(Vec3::new(wx - 0.3, y, wz - 0.3), Vec3::new(wx + 0.3, y + 0.6, wz + 0.3), Tex::Roof, Tex::Roof, rgb(0.2, 0.2, 0.2), 0.0);
+        self.prop_solid(name, x, z, (yaw / std::f32::consts::FRAC_PI_2).round() * std::f32::consts::FRAC_PI_2, 1.25, 2.6, 1.6, tint);
+        // keep the visible jitter on the model itself
+        if let Some(last) = self.g.props.last_mut() {
+            last.1 = trs(self.o + Vec3::new(x, y, z), Quat::from_rotation_y(yaw), Vec3::ONE);
         }
-        self.g.cols.push(Aabb::low(self.o + Vec3::new(x - dx / 2.0, 0.0, z - dz / 2.0), self.o + Vec3::new(x + dx / 2.0, 1.5, z + dz / 2.0)));
         if burning {
             let p = self.p(x, y + 1.2, z);
             self.g.emitters.push((p, EmitKind::Fire));
@@ -314,24 +326,70 @@ impl Gen {
             let off = (i as f32 - 1.0) * 2.6;
             let (px, pz) = if along_x { (x + off, z) } else { (x, z + off) };
             let (hx, hz) = if along_x { (1.2, 0.35) } else { (0.35, 1.2) };
-            if chance(&mut self.r, 0.5) {
-                self.low(Vec3::new(px - hx, 0.0, pz - hz), Vec3::new(px + hx, 1.0, pz + hz), Tex::Concrete, WHITE, 2.0);
-            } else {
-                self.low(Vec3::new(px - hx, 0.0, pz - hz * 1.5), Vec3::new(px + hx, 1.1, pz + hz * 1.5), Tex::Sandbag, WHITE, 1.2);
+            let yaw = if along_x { 0.0 } else { std::f32::consts::FRAC_PI_2 };
+            match self.r.u32(0..4) {
+                0 => {
+                    self.prop("TrafficBarrier_1", px - if along_x { 0.8 } else { 0.0 }, pz - if along_x { 0.0 } else { 0.8 }, yaw, 1.0, [1.0; 4]);
+                    self.prop("TrafficBarrier_1", px + if along_x { 0.8 } else { 0.0 }, pz + if along_x { 0.0 } else { 0.8 }, yaw, 1.0, [1.0; 4]);
+                    self.g.cols.push(Aabb::low(self.o + Vec3::new(px - hx * 1.3, 0.0, pz - hz * 1.2), self.o + Vec3::new(px + hx * 1.3, 1.1, pz + hz * 1.2)));
+                }
+                1 => {
+                    for k in 0..2 {
+                        let o = (k as f32 - 0.5) * 1.1;
+                        self.prop("PlasticBarrier", px + if along_x { o } else { 0.0 }, pz + if along_x { 0.0 } else { o }, yaw, 1.0, [1.0; 4]);
+                    }
+                    self.g.cols.push(Aabb::low(self.o + Vec3::new(px - hx, 0.0, pz - hz * 0.6), self.o + Vec3::new(px + hx, 0.7, pz + hz * 0.6)));
+                }
+                _ => {
+                    self.low(Vec3::new(px - hx, 0.0, pz - hz * 1.5), Vec3::new(px + hx, 1.1, pz + hz * 1.5), Tex::Sandbag, WHITE, 1.2);
+                }
+            }
+            if chance(&mut self.r, 0.4) {
+                let c = *crate::util::pick(&mut self.r, &["TrafficCone_1", "TrafficCone_2"]);
+                let y2 = rf(&mut self.r, 0.0, 6.28);
+                let (ox, oz) = (rf(&mut self.r, -1.5, 1.5), rf(&mut self.r, 1.0, 1.8));
+                self.prop(c, px + ox, pz + oz, y2, 1.0, [1.0; 4]);
             }
         }
     }
 
     fn crates(&mut self, x: f32, z: f32) {
         let y = self.g_h(x, z);
-        for i in 0..self.r.u32(1..4) {
-            let (px, pz, s) = (x + rf(&mut self.r, -1.2, 1.2), z + rf(&mut self.r, -1.2, 1.2), rf(&mut self.r, 0.7, 1.1));
-            let tex = if i % 2 == 0 { Tex::Crate } else { Tex::Tarp };
-            self.low(Vec3::new(px - s / 2.0, y, pz - s / 2.0), Vec3::new(px + s / 2.0, y + s, pz + s / 2.0), tex, WHITE, 0.0);
+        let _ = y;
+        for _ in 0..self.r.u32(1..4) {
+            let (px, pz) = (x + rf(&mut self.r, -1.2, 1.2), z + rf(&mut self.r, -1.2, 1.2));
+            let yaw = rf(&mut self.r, 0.0, 6.28);
+            match self.r.u32(0..6) {
+                0 => self.prop_solid("Barrel", px, pz, 0.0, 0.35, 0.35, 1.15, [1.0; 4]),
+                1 => {
+                    for k in 0..self.r.u32(1..4) {
+                        let m = trs(self.p(px, self.g_h(px, pz) + k as f32 * 0.14, pz), Quat::from_rotation_y(yaw + k as f32 * 0.3), Vec3::ONE);
+                        self.g.props.push(("Pallet", m, [1.0; 4]));
+                    }
+                }
+                2 => self.prop_solid("Chest", px, pz, yaw, 0.32, 0.32, 0.41, [1.0; 4]),
+                3 => self.prop("Wheels_Stack", px, pz, yaw, 1.0, [1.0; 4]),
+                4 => {
+                    for k in 0..4 {
+                        self.prop("CinderBlock", px + (k % 2) as f32 * 0.5, pz + (k / 2) as f32 * 0.25, 0.0, 1.0, [1.0; 4]);
+                    }
+                }
+                _ => self.prop("Pallet_Broken", px, pz, yaw, 1.0, [1.0; 4]),
+            }
         }
     }
+    /// Alley rubbish: a skip made from a container, bags and a barrel.
     fn dumpster(&mut self, x: f32, z: f32) {
-        self.low(Vec3::new(x - 1.1, KERB, z - 0.6), Vec3::new(x + 1.1, KERB + 1.3, z + 0.6), Tex::Rust, rgb(0.3, 0.45, 0.3), 0.0);
+        let name = *crate::util::pick(&mut self.r, &["Container_Green", "Container_Red"]);
+        let m = trs(self.p(x, KERB, z), Quat::IDENTITY, Vec3::new(0.42, 0.5, 0.55));
+        self.g.props.push((name, m, [0.85, 0.85, 0.85, 0.0]));
+        self.g.cols.push(Aabb::low(self.o + Vec3::new(x - 1.2, 0.0, z - 0.7), self.o + Vec3::new(x + 1.2, 1.4, z + 0.7)));
+        for k in 0..self.r.u32(1..4) {
+            let b = *crate::util::pick(&mut self.r, &["TrashBag_1", "TrashBag_2"]);
+            let yaw = rf(&mut self.r, 0.0, 6.28);
+            let oz = rf(&mut self.r, -0.5, 0.5);
+            self.prop(b, x - 1.6 + k as f32 * 0.6, z + oz, yaw, 1.0, [1.0; 4]);
+        }
     }
     fn fence(&mut self, x0: f32, z0: f32, x1: f32, z1: f32) {
         let (a, b) = (self.p(x0, KERB, z0), self.p(x1, KERB, z1));
@@ -564,6 +622,27 @@ impl Gen {
         if chance(&mut self.r, 0.5) {
             self.lamp(CS - ROAD - 0.8, ROAD + 0.8, 0.0, -1.0);
         }
+        // kerbside dressing: hydrants, rubbish, a traffic light on the corner
+        if chance(&mut self.r, 0.6) {
+            let x = rf(&mut self.r, ROAD + 4.0, CS - ROAD - 4.0);
+            self.prop_solid("FireHydrant", x, ROAD + 0.6, 0.0, 0.25, 0.2, 0.8, [1.0; 4]);
+        }
+        for _ in 0..self.r.u32(0..4) {
+            let (x, z) = if chance(&mut self.r, 0.5) { (rf(&mut self.r, ROAD + 1.0, CS - ROAD - 1.0), ROAD + 0.5) } else { (ROAD + 0.5, rf(&mut self.r, ROAD + 1.0, CS - ROAD - 1.0)) };
+            let b = *crate::util::pick(&mut self.r, &["TrashBag_1", "TrashBag_2", "TrashBag_1"]);
+            let yaw = rf(&mut self.r, 0.0, 6.28);
+            self.prop(b, x, z, yaw, 1.0, [1.0; 4]);
+        }
+        if chance(&mut self.r, 0.35) {
+            self.prop_solid("TrafficLight_1", ROAD + 0.5, CS - ROAD - 0.5, std::f32::consts::FRAC_PI_2, 0.2, 0.2, 4.6, [0.85, 0.85, 0.85, 0.0]);
+        }
+        if self.state != DState::Held && chance(&mut self.r, 0.3) {
+            for _ in 0..self.r.u32(2..5) {
+                let c = *crate::util::pick(&mut self.r, &["TrafficCone_1", "TrafficCone_2"]);
+                let (x, z, y) = (rf(&mut self.r, 2.0, ROAD - 1.0), rf(&mut self.r, ROAD, CS - ROAD), rf(&mut self.r, 0.0, 6.28));
+                self.prop(c, x, z, y, 1.0, [1.0; 4]);
+            }
+        }
         // parked / wrecked cars along the south and west roads
         let ncar = self.r.u32(0..4);
         for _ in 0..ncar {
@@ -765,10 +844,15 @@ impl Gen {
                 }
                 self.solid(Vec3::new(mid - 0.5, KERB, mid + 4.0), Vec3::new(mid + 3.0, KERB + 3.4, mid + 16.0), Tex::Rust, Tex::Rust, rgb(0.5, 0.3, 0.25), 3.0);
                 let (wx, wz) = (b - 5.0, a + 5.0);
-                for (dx, dz) in [(-2.0, -2.0), (2.0, -2.0), (-2.0, 2.0), (2.0, 2.0)] {
-                    self.low(Vec3::new(wx + dx - 0.2, KERB, wz + dz - 0.2), Vec3::new(wx + dx + 0.2, KERB + 14.0, wz + dz + 0.2), Tex::Rust, WHITE, 2.0);
+                let m = trs(self.p(wx, KERB, wz), Quat::IDENTITY, Vec3::splat(2.1));
+                self.g.props.push(("WaterTower", m, [1.0; 4]));
+                self.g.cols.push(Aabb::low(self.o + Vec3::new(wx - 2.8, 0.0, wz - 2.8), self.o + Vec3::new(wx + 2.8, 19.0, wz + 2.8)));
+                for k in 0..4 {
+                    let name = if k % 2 == 0 { "Container_Green" } else { "Container_Red" };
+                    let m = trs(self.p(a + 18.0, KERB + if k >= 2 { 2.6 } else { 0.0 }, b - 6.0 - (k % 2) as f32 * 2.7), Quat::IDENTITY, Vec3::ONE);
+                    self.g.props.push((name, m, [1.0; 4]));
                 }
-                self.bx(Vec3::new(wx - 3.2, KERB + 14.0, wz - 3.2), Vec3::new(wx + 3.2, KERB + 20.0, wz + 3.2), Tex::Rust, Tex::Rust, WHITE, 3.0);
+                self.g.cols.push(Aabb::new(self.o + Vec3::new(a + 15.1, 0.0, b - 10.0), self.o + Vec3::new(a + 20.9, 5.3, b - 4.7)));
                 self.light(wx, 12.0, wz, [3.0, 1.6, 0.5], 22.0, 1);
                 self.spawn(mid + 6.0, mid - 8.0, SpawnKind::Apex(3));
                 self.spawn(mid + 8.0, mid + 10.0, SpawnKind::Infected);

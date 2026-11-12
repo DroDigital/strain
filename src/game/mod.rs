@@ -92,6 +92,7 @@ pub struct Labels {
 
 pub struct Game {
     pub t: Tables,
+    pub lib: std::sync::Arc<crate::render::model::Library>,
     pub w: World,
     pub area: Area,
     pub player: Entity,
@@ -190,13 +191,15 @@ pub struct Game {
     pub bot_stop_on_death: bool,
     pub bug_steps: u32,
     pub bug_yaw: f32,
+    /// ground decals: (model id, transform, seconds left)
+    pub decals: Vec<(u32, glam::Mat4, f32)>,
     pub build_start: std::time::Instant,
     pub build_ms: f32,
     pub prof_acc: (f32, f32, u32),
 }
 
 impl Game {
-    pub fn new(t: Tables, settings: Settings, audio: Audio, adapter: String) -> Game {
+    pub fn new(t: Tables, settings: Settings, audio: Audio, adapter: String, lib: std::sync::Arc<crate::render::model::Library>) -> Game {
         let seed = 0x5eed_1234;
         let gear = player::starting_gear(&t, &mut Rng::with_seed(1));
         let mut g = Game {
@@ -296,9 +299,11 @@ impl Game {
             bot_stop_on_death: false,
             bug_steps: 0,
             bug_yaw: 0.0,
+            decals: Vec::new(),
             build_start: std::time::Instant::now(),
             build_ms: 0.0,
             t,
+            lib,
         };
         g.make_player();
         g.pl.compute(&g.t);
@@ -315,6 +320,7 @@ impl Game {
         self.w.actor.insert(e, a);
         self.w.rig.insert(e, Rig::new(player::player_plan(&self.t, &self.pl)));
         self.player = e;
+        self.apply_skin(e);
     }
 
     // ---- small feedback helpers ------------------------------------------------------------
@@ -343,6 +349,21 @@ impl Game {
             self.floats.push((p, s.to_string(), c, 1.0));
         }
     }
+    /// Leave a blood splat on the ground.
+    pub fn blood_decal(&mut self, p: Vec3, size: f32, ichor: bool) {
+        let name = ["Blood_1", "Blood_2", "Blood_3"][self.rng.usize(0..3)];
+        if let Some(&id) = self.lib.static_id.get(name) {
+            let yaw = self.rng.f32() * std::f32::consts::TAU;
+            let y = self.area.ground(p.x, p.z) + 0.01 + self.decals.len() as f32 * 0.0004;
+            let m = glam::Mat4::from_scale_rotation_translation(glam::Vec3::new(size, 1.0, size), glam::Quat::from_rotation_y(yaw), glam::Vec3::new(p.x, y, p.z));
+            let _ = ichor;
+            self.decals.push((id, m, 60.0));
+            if self.decals.len() > 90 {
+                self.decals.remove(0);
+            }
+        }
+    }
+
     pub fn shake(&mut self, k: f32) {
         self.cam.trauma = (self.cam.trauma + k).min(1.0);
     }
@@ -667,6 +688,10 @@ impl Game {
                 self.pl.last_hit_target = None;
             }
         }
+        for d in &mut self.decals {
+            d.2 -= dt;
+        }
+        self.decals.retain(|d| d.2 > 0.0);
         for x in &mut self.tethers_fx {
             x.2 -= dt;
         }

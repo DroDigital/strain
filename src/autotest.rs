@@ -50,6 +50,59 @@ impl AutoTest {
         use Step::*;
         let steps: Vec<Step> = match name.as_str() {
             "title" => vec![Wait(40), Shot("title")],
+            "look" => vec![
+                Wait(10),
+                Do(|g| {
+                    std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                    g.new_game();
+                    g.tod = 0.45;
+                    let p = crate::world::chunk_center(1, (2, 2)) + Vec3::new(-24.5, 0.0, -10.0);
+                    teleport(g, p);
+                    g.cam.yaw = 0.0;
+                }),
+                Wait(20),
+                Do(|g| { g.cam.dist = 2.6; g.cam.pitch = 0.15; }),
+                Wait(10),
+                Shot("player_back"),
+                Do(|g| { g.cam.yaw = std::f32::consts::PI; }),
+                Wait(10),
+                Shot("player_front"),
+                Do(|g| {
+                    g.cam.dist = 4.4;
+                    g.cam.yaw = 0.0;
+                    let p = g.ppos();
+                    let kinds = ["rusher", "brute", "leaper", "spitter", "crawler", "shielded", "ambusher", "summoner"];
+                    for (k, id) in kinds.iter().enumerate() {
+                        let e = g.spawn_archetype(id, p + Vec3::new(k as f32 * 1.6 - 5.6, 0.0, 7.0), 1 + (k % 3) as u8, 6, None);
+                        if let Some(b) = g.w.body.get_mut(e) { b.yaw = std::f32::consts::PI; }
+                        if let Some(ai) = g.w.ai.get_mut(e) { ai.cd = 99.0; ai.think = 99.0; }
+                    }
+                    for k in 0..3 {
+                        let e = g.spawn_soldier(p + Vec3::new(k as f32 * 1.4 - 1.4, 0.0, 11.0), 5, 3);
+                        if let Some(b) = g.w.body.get_mut(e) { b.yaw = std::f32::consts::PI; }
+                    }
+                    for k in 0..2 {
+                        let e = g.spawn_civilian(p + Vec3::new(k as f32 * 1.4 + 3.0, 0.0, 11.0));
+                        if let Some(b) = g.w.body.get_mut(e) { b.yaw = std::f32::consts::PI; }
+                    }
+                }),
+                Wait(30),
+                Shot("lineup"),
+                Hold(Action::MoveF, 40),
+                Shot("walking"),
+                Tap(Action::Light),
+                Wait(9),
+                Shot("attack"),
+                Wait(30),
+                Do(|g| g.enter_rift(0)),
+                Do(|g| {
+                    let (c, _) = g.area.arena;
+                    g.place_player(c + Vec3::new(0.0, 0.0, -9.0));
+                }),
+                Wait(40),
+                Shot("boss_look"),
+                Log("look done"),
+            ],
             "roam" => vec![
                 Wait(10),
                 Do(|g| {

@@ -486,6 +486,8 @@ impl Game {
         if let Some(r) = self.w.rig.get_mut(self.player) {
             r.plan = plan;
         }
+        let pe = self.player;
+        self.apply_skin(pe);
         let sp = self.pl.spells(&self.t);
         if self.pl.spell_idx >= sp.len() {
             self.pl.spell_idx = 0;

@@ -135,6 +135,70 @@ impl Game {
         p
     }
 
+    /// Pick and attach a glTF body for an actor, hiding parts replaced by mutations.
+    pub fn apply_skin(&mut self, e: Entity) {
+        use crate::anim::{SkinKind, SkinRig};
+        let lib = self.lib.clone();
+        let Some(ai) = self.w.ai.get(e).map(|a| a.kind).or(if e == self.player { Some(AiKind::Ally) } else { None }) else { return };
+        let foe = self.w.foe.get(e).cloned();
+        let seed = self.w.rig.get(e).map(|r| r.plan.seed).unwrap_or(1);
+        let pick = |opts: &[&'static str]| opts[(seed as usize) % opts.len()];
+        let arch = foe.as_ref().map(|f| self.t.archetypes[f.arch].id.clone()).unwrap_or_default();
+        let humans = ["Characters_Matt_SingleWeapon", "Characters_Lis_SingleWeapon", "Characters_Sam_SingleWeapon", "Characters_Shaun_SingleWeapon"];
+        let (model, kind, scale, crawl, gun, tint): (&str, SkinKind, f32, bool, bool, [f32; 3]) = if e == self.player {
+            ("Characters_Matt_SingleWeapon", SkinKind::Human, 1.0, false, false, [1.0; 3])
+        } else if foe.as_ref().map(|f| f.mimic).unwrap_or(false) {
+            (pick(&humans), SkinKind::Human, 1.0, false, false, [1.0; 3])
+        } else if foe.as_ref().map(|f| f.husk).unwrap_or(false) {
+            ("Characters_Matt_SingleWeapon", SkinKind::Human, 1.0, false, false, [0.45, 0.4, 0.5])
+        } else if let Some(bi) = foe.as_ref().and_then(|f| f.boss) {
+            let m = ["Zombie_Chubby", "Zombie_Ribcage", "Zombie_Arm", "Zombie_Ribcage", "Zombie_Chubby"][bi.min(4)];
+            let tint = self.t.bosses[bi].tint;
+            (m, SkinKind::Zombie, 1.0, false, false, [tint.0, tint.1, tint.2])
+        } else {
+            match ai {
+                AiKind::Soldier => (pick(&["Characters_Shaun_SingleWeapon", "Characters_Sam_SingleWeapon"]), SkinKind::Human, 1.0, false, true, [0.72, 0.82, 0.62]),
+                AiKind::Civilian => (pick(&humans), SkinKind::Human, 0.97, false, false, [1.0; 3]),
+                AiKind::Ally => ("Zombie_Ribcage", SkinKind::Zombie, 0.42, true, false, [0.6, 1.0, 0.6]),
+                AiKind::Crawler => ("Zombie_Ribcage", SkinKind::Zombie, 0.5, true, false, [1.0, 0.85, 0.9]),
+                AiKind::Leaper if arch == "leaper" => ("Characters_GermanShepherd", SkinKind::Dog, 0.5, false, false, [0.8, 0.6, 0.65]),
+                AiKind::Brute | AiKind::Summoner => ("Zombie_Chubby", SkinKind::Zombie, 1.1, false, false, [1.0; 3]),
+                AiKind::Spitter => (pick(&["Zombie_Chubby", "Zombie_Basic"]), SkinKind::Zombie, 1.0, false, false, [1.0; 3]),
+                AiKind::Ambusher => ("Zombie_Ribcage", SkinKind::Zombie, 1.05, false, false, [1.0; 3]),
+                _ => (pick(&["Zombie_Basic", "Zombie_Arm", "Zombie_Basic", "Zombie_Ribcage"]), SkinKind::Zombie, 1.0, false, false, [1.0; 3]),
+            }
+        };
+        let Some(mut sk) = SkinRig::new(&lib, model, kind) else { return };
+        sk.scale = scale;
+        sk.crawl = crawl;
+        sk.gun = gun;
+        // later infection stages lose their colour and take on a bruised, glistening cast
+        let stage_tint = match foe.as_ref().map(|f| f.stage).unwrap_or(0) {
+            2 => [0.92, 0.85, 0.98],
+            3 => [0.85, 0.72, 0.92],
+            4 => [0.95, 0.8, 0.75],
+            _ => [1.0; 3],
+        };
+        sk.tint = [tint[0] * stage_tint[0], tint[1] * stage_tint[1], tint[2] * stage_tint[2]];
+        if let Some(rig) = self.w.rig.get(e) {
+            let p = rig.plan.clone();
+            if kind != SkinKind::Dog {
+                if matches!(p.head, HeadKind::Bloom | HeadKind::Cluster | HeadKind::Stalk | HeadKind::Crown | HeadKind::None) {
+                    sk.hide_joint(&lib, "Head");
+                }
+                for arm in p.arms.iter().take(2) {
+                    let mutated = matches!(arm.kind, ArmKind::Blade | ArmKind::Tendril | ArmKind::Club | ArmKind::Cannon) || (arm.kind == ArmKind::Claw && foe.as_ref().map(|f| f.stage >= 2).unwrap_or(false));
+                    if mutated {
+                        sk.hide_joint(&lib, if arm.side > 0.0 { "LowerArm.L" } else { "LowerArm.R" });
+                    }
+                }
+            }
+        }
+        if let Some(rig) = self.w.rig.get_mut(e) {
+            rig.skin = Some(sk);
+        }
+    }
+
     fn insert_actor(&mut self, pos: Vec3, plan: BodyPlan, actor: Actor, ai: Ai, foe: Option<Foe>) -> Entity {
         let e = self.w.spawn();
         let s = plan.scale;
@@ -150,6 +214,7 @@ impl Game {
         if let Some(f) = foe {
             self.w.foe.insert(e, f);
         }
+        self.apply_skin(e);
         e
     }
 
@@ -257,6 +322,7 @@ impl Game {
             if let Some(r) = self.w.rig.get_mut(e) {
                 *r = Rig::new(plan);
             }
+            self.apply_skin(e);
         }
         let p = self.w.body.get(e).unwrap().center();
         self.parts.burst(crate::particles::Fx::Ichor, p, glam::Vec3::Y, 40, 2.0);
@@ -376,6 +442,7 @@ impl Game {
         if self.mimic_plans.contains_key(&e.id) {
             self.mimic_plans.remove(&e.id);
         }
+        self.apply_skin(e);
         Some(e)
     }
 

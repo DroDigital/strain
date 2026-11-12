@@ -1308,6 +1308,8 @@ impl Game {
         let b = *self.w.body.get(e).unwrap();
         self.audio.play_at(Sfx::Death, b.pos, 0.6, rf(&mut self.rng, 0.8, 1.3));
         self.parts.burst(if team == Team::Infected { Fx::Ichor } else { Fx::Blood }, b.center(), Vec3::Y, 24, 1.6);
+        let sz = self.w.rig.get(e).map(|r| r.plan.scale).unwrap_or(1.0) * crate::util::rf(&mut self.rng, 0.5, 0.9);
+        self.blood_decal(b.pos, sz, team == Team::Infected);
         if self.pl.lock == Some(e) {
             self.pl.lock = None;
         }

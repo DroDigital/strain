@@ -2,6 +2,7 @@
 //! STRAIN — entry point: window, event loop, loading screen and settings application.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 mod anim;
+mod assets;
 mod audio;
 mod data;
 mod ecs;
@@ -126,13 +127,16 @@ impl ApplicationHandler for App {
         let settings = game::save::load_settings();
         let attrs = Window::default_attributes().with_title("STRAIN").with_inner_size(winit::dpi::LogicalSize::new(1280, 720)).with_min_inner_size(winit::dpi::LogicalSize::new(640, 360));
         let window = Arc::new(el.create_window(attrs).expect("create window"));
-        let r = Renderer::new(window.clone(), el.owned_display_handle(), settings.gfx.clone(), build_prims());
+        let (mut prim_mb, mut prim_ranges) = build_prims();
+        let lib = std::sync::Arc::new(render::model::Library::build(&mut prim_mb, &mut prim_ranges));
+        let mut r = Renderer::new(window.clone(), el.owned_display_handle(), settings.gfx.clone(), (prim_mb, prim_ranges));
+        r.upload_skinned(&lib.skin_data());
         let tables = data::Tables::load();
         let audio = audio::Audio::new();
         let adapter = r.adapter_info.clone();
         eprintln!("STRAIN: adapter {adapter}, audio {}", if audio.ok { "ok" } else { "unavailable" });
         let input = Input::new(settings.bindings.clone());
-        let mut game = Game::new(tables, settings, audio, adapter);
+        let mut game = Game::new(tables, settings, audio, adapter, lib);
         game.screen = Screen::Loading;
         let test = autotest::AutoTest::from_env();
         self.run = Some(Running { window, r, game, input, last: Instant::now(), load_step: 0, grabbed: false, focused: true, test, applied_mode: None });

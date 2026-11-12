@@ -56,16 +56,25 @@ pub struct MusicState {
     pub volume: f32,
     pub music_volume: f32,
     pub muffle: f32,
+    /// closeness to the nearest fire (0..1), drives the crackle bed
+    pub fire: f32,
+}
+
+/// A mono sample buffer at its own rate.
+pub struct Sound {
+    pub data: Vec<f32>,
+    pub sr: f32,
 }
 
 enum Cmd {
-    Bank(Vec<Arc<Vec<f32>>>),
+    /// per sound: one or more recorded variants; plus the ambience loops (rain, fire)
+    Bank(Vec<Vec<Arc<Sound>>>, Vec<Arc<Sound>>),
     Play { id: usize, l: f32, r: f32, rate: f32 },
     Music(MusicState),
 }
 
 struct Voice {
-    buf: Arc<Vec<f32>>,
+    buf: Arc<Sound>,
     pos: f64,
     rate: f64,
     l: f32,
@@ -359,7 +368,7 @@ impl Music {
         self.lp[4] += (self.rng.f() - self.lp[4]) * 0.35;
         self.lp[5] += (self.lp[4] - self.lp[5]) * 0.6;
         let wind = self.lp[3] * 6.0 * (0.25 + c.wind);
-        let rain = (self.lp[4] - self.lp[5] * 0.7) * 0.22 * c.rain;
+        let rain = (self.lp[4] - self.lp[5] * 0.7) * 0.07 * c.rain;
         let music = (drone * (0.5 + 0.2 * c.mood) + bass * 0.55 + kick * 0.6 + hat + arp + strain) * self.st.music_volume * 0.6;
         let amb = wind * 0.12 + rain;
         let pan = ((self.t * 0.11) as f32 * TAU).sin() * 0.15;
@@ -373,7 +382,11 @@ fn smooth01(x: f32) -> f32 {
 
 struct Mixer {
     queue: Arc<Mutex<Vec<Cmd>>>,
-    bank: Vec<Arc<Vec<f32>>>,
+    bank: Vec<Vec<Arc<Sound>>>,
+    loops: Vec<Arc<Sound>>,
+    loop_pos: [f64; 2],
+    loop_gain: [f32; 2],
+    seed: u32,
     voices: Vec<Voice>,
     music: Music,
     sr: f32,
@@ -384,11 +397,17 @@ impl Mixer {
         if let Ok(mut q) = self.queue.try_lock() {
             for c in q.drain(..) {
                 match c {
-                    Cmd::Bank(b) => self.bank = b,
+                    Cmd::Bank(b, loops) => {
+                        self.bank = b;
+                        self.loops = loops;
+                    }
                     Cmd::Play { id, l, r, rate } => {
-                        if let Some(buf) = self.bank.get(id) {
+                        if let Some(vars) = self.bank.get(id).filter(|v| !v.is_empty()) {
                             if self.voices.len() < 48 {
-                                self.voices.push(Voice { buf: buf.clone(), pos: 0.0, rate: (rate * SR / self.sr) as f64, l, r });
+                                self.seed = self.seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                                let buf = vars[(self.seed >> 16) as usize % vars.len()].clone();
+                                let rate = (rate * buf.sr / self.sr) as f64;
+                                self.voices.push(Voice { buf, pos: 0.0, rate, l, r });
                             }
                         }
                     }
@@ -400,11 +419,23 @@ impl Mixer {
         let muffle = self.music.cur.muffle;
         for frame in out.chunks_mut(channels) {
             let (mut l, mut r) = self.music.next(self.sr);
+            // ambience beds: rain and nearby fire
+            let targets = [self.music.cur.rain * 0.55, self.music.st.fire * 0.7];
+            for (k, lp) in self.loops.iter().enumerate().take(2) {
+                self.loop_gain[k] += (targets[k] - self.loop_gain[k]) * 0.00005;
+                if self.loop_gain[k] > 0.001 && lp.data.len() > 2 {
+                    let i = self.loop_pos[k] as usize % lp.data.len();
+                    let s = lp.data[i] * self.loop_gain[k] * self.music.st.volume.min(1.0);
+                    l += s;
+                    r += s * if k == 0 { 0.95 } else { 1.0 };
+                }
+                self.loop_pos[k] = (self.loop_pos[k] + (lp.sr / self.sr) as f64) % lp.data.len().max(1) as f64;
+            }
             for v in &mut self.voices {
                 let i = v.pos as usize;
-                if i + 1 < v.buf.len() {
+                if i + 1 < v.buf.data.len() {
                     let f = (v.pos - i as f64) as f32;
-                    let s = v.buf[i] * (1.0 - f) + v.buf[i + 1] * f;
+                    let s = v.buf.data[i] * (1.0 - f) + v.buf.data[i + 1] * f;
                     l += s * v.l;
                     r += s * v.r;
                 }
@@ -426,7 +457,7 @@ impl Mixer {
                 }
             }
         }
-        self.voices.retain(|v| (v.pos as usize) + 1 < v.buf.len());
+        self.voices.retain(|v| (v.pos as usize) + 1 < v.buf.data.len());
     }
 }
 
@@ -442,7 +473,7 @@ impl Audio {
         let sup = device.default_output_config().ok()?;
         let cfg = sup.config();
         let channels = cfg.channels as usize;
-        let mut mixer = Mixer { queue, bank: Vec::new(), voices: Vec::new(), music: Music::new(), sr: cfg.sample_rate as f32, lp: [0.0; 2] };
+        let mut mixer = Mixer { queue, bank: Vec::new(), loops: Vec::new(), loop_pos: [0.0; 2], loop_gain: [0.0; 2], seed: 99, voices: Vec::new(), music: Music::new(), sr: cfg.sample_rate as f32, lp: [0.0; 2] };
         let err = |e| eprintln!("audio stream error: {e}");
         let mut scratch: Vec<f32> = Vec::new();
         let stream = match sup.sample_format() {
@@ -486,8 +517,8 @@ impl Audio {
     }
     /// Synthesise the whole sound bank (called from the loading screen).
     pub fn build_bank(&self) {
-        let bank: Vec<Arc<Vec<f32>>> = (0..Sfx::Count as usize).map(|i| Arc::new(synth(unsafe { std::mem::transmute::<usize, Sfx>(i) }))).collect();
-        self.send(Cmd::Bank(bank));
+        let (bank, loops) = load_bank();
+        self.send(Cmd::Bank(bank, loops));
     }
     /// Non-positional sound.
     pub fn play(&self, s: Sfx, vol: f32, rate: f32) {
@@ -507,6 +538,85 @@ impl Audio {
     pub fn set_music(&self, m: MusicState) {
         self.send(Cmd::Music(m));
     }
+}
+
+/// Asset name of the recorded variants for a sound (None = synthesised).
+fn sample_name(s: Sfx) -> Option<&'static str> {
+    Some(match s {
+        Sfx::Swing => "swing",
+        Sfx::SwingHeavy => "swing_heavy",
+        Sfx::HitFlesh => "hit_flesh",
+        Sfx::HitHeavy => "hit_heavy",
+        Sfx::Block => "block",
+        Sfx::Parry => "parry",
+        Sfx::Rupture => "rupture",
+        Sfx::Step => "step",
+        Sfx::Dodge => "dodge",
+        Sfx::Hurt => "hurt",
+        Sfx::Death => "death",
+        Sfx::Growl => "growl",
+        Sfx::Shriek => "shriek",
+        Sfx::Spit => "spit",
+        Sfx::Cast => "cast",
+        Sfx::Fire => "fire",
+        Sfx::Explode => "explode",
+        Sfx::Rift => "rift",
+        Sfx::Heal => "heal",
+        Sfx::Pickup => "pickup",
+        Sfx::Gunshot => "gunshot",
+        Sfx::BurnPit => "burn_pit",
+        Sfx::BossRoar => "boss_roar",
+        Sfx::Thunder => "thunder",
+        Sfx::Bloom => "bloom",
+        Sfx::Larva => "larva",
+        _ => return None,
+    })
+}
+
+fn load_sample(path: &str) -> Option<Arc<Sound>> {
+    let (data, sr) = crate::assets::decode_wav(crate::assets::get(path)?)?;
+    Some(Arc::new(Sound { data, sr: sr as f32 }))
+}
+
+/// Make a loop seamless by crossfading its tail into its head.
+fn seamless(mut s: Sound) -> Sound {
+    let n = (s.sr * 0.6) as usize;
+    if s.data.len() > n * 3 {
+        let len = s.data.len() - n;
+        for i in 0..n {
+            let k = i as f32 / n as f32;
+            s.data[i] = s.data[i] * k + s.data[len + i] * (1.0 - k);
+        }
+        s.data.truncate(len);
+    }
+    s
+}
+
+/// Recorded variants where available, synthesis otherwise; plus the ambience loops.
+fn load_bank() -> (Vec<Vec<Arc<Sound>>>, Vec<Arc<Sound>>) {
+    let mut bank = Vec::new();
+    for i in 0..Sfx::Count as usize {
+        let s: Sfx = unsafe { std::mem::transmute::<usize, Sfx>(i) };
+        let mut vars: Vec<Arc<Sound>> = Vec::new();
+        if let Some(name) = sample_name(s) {
+            for k in 0..64 {
+                match load_sample(&format!("audio/{name}_{k}.wav")) {
+                    Some(v) => vars.push(v),
+                    None => break,
+                }
+            }
+        }
+        if vars.is_empty() {
+            vars.push(Arc::new(Sound { data: synth(s), sr: SR }));
+        }
+        bank.push(vars);
+    }
+    let mut loops = Vec::new();
+    for name in ["ambient_rain_0", "ambient_fire_0"] {
+        let s = load_sample(&format!("audio/{name}.wav")).map(|a| Arc::try_unwrap(a).ok().unwrap()).map(seamless).unwrap_or(Sound { data: vec![0.0; 16], sr: SR });
+        loops.push(Arc::new(s));
+    }
+    (bank, loops)
 }
 
 #[cfg(test)]
@@ -534,7 +644,7 @@ mod tests {
     fn music_layers_stay_bounded() {
         for (combat, strain, boss) in [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 1.0)] {
             let mut m = Music::new();
-            m.st = MusicState { combat, strain, boss, mood: 2.0, rain: 1.0, wind: 1.0, volume: 1.0, music_volume: 1.0, muffle: 0.0 };
+            m.st = MusicState { combat, strain, boss, mood: 2.0, rain: 1.0, wind: 1.0, volume: 1.0, music_volume: 1.0, muffle: 0.0, fire: 0.0 };
             m.cur = m.st;
             let mut buf = Vec::new();
             for _ in 0..44100 * 2 {
@@ -551,9 +661,11 @@ mod tests {
     #[test]
     fn mixer_fills_stereo_buffers() {
         let q = Arc::new(Mutex::new(Vec::new()));
-        let mut mx = Mixer { queue: q.clone(), bank: Vec::new(), voices: Vec::new(), music: Music::new(), sr: 48000.0, lp: [0.0; 2] };
-        q.lock().unwrap().push(Cmd::Bank((0..Sfx::Count as usize).map(|i| Arc::new(synth(unsafe { std::mem::transmute::<usize, Sfx>(i) }))).collect()));
-        q.lock().unwrap().push(Cmd::Music(MusicState { volume: 1.0, music_volume: 1.0, ..Default::default() }));
+        let mut mx = Mixer { queue: q.clone(), bank: Vec::new(), loops: Vec::new(), loop_pos: [0.0; 2], loop_gain: [0.0; 2], seed: 1, voices: Vec::new(), music: Music::new(), sr: 48000.0, lp: [0.0; 2] };
+        let (bank, loops) = load_bank();
+        assert!(bank.iter().filter(|v| v.len() > 1).count() >= 20, "recorded variants missing");
+        q.lock().unwrap().push(Cmd::Bank(bank, loops));
+        q.lock().unwrap().push(Cmd::Music(MusicState { volume: 1.0, music_volume: 1.0, rain: 1.0, fire: 1.0, ..Default::default() }));
         for i in 0..Sfx::Count as usize {
             q.lock().unwrap().push(Cmd::Play { id: i, l: 0.5, r: 0.5, rate: 1.0 });
         }
