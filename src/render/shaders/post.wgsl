@@ -19,6 +19,38 @@ fn shadow_vis(p: vec3<f32>) -> f32 {
     return textureSampleCompareLevel(t_shadow, s_shadow, suv, sp.z - 0.002);
 }
 
+fn world_at(px: vec2<i32>) -> vec4<f32> {
+    let d = textureLoad(t_depth, px, 0);
+    let uv = (vec2<f32>(px) + 0.5) / G.screen.xy;
+    let w = G.inv_view_proj * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, d, 1.0);
+    return vec4<f32>(w.xyz / w.w, d);
+}
+
+// Ambient occlusion from depth alone: samples on a rotated disc that sit in front of this pixel
+// (closer to the camera, within half a metre) darken creases, corners and contact with the ground.
+fn ssao(px: vec2<i32>, dist: f32, ro: vec3<f32>, frag: vec2<f32>) -> f32 {
+    if (dist > 45.0) { return 1.0; }
+    let r = clamp(0.55 / max(dist, 0.5) * G.screen.y, 2.0, 26.0);
+    let rot = bayer(frag) * 6.2831;
+    var occ = 0.0;
+    for (var i = 0; i < 8; i = i + 1) {
+        let a = rot + f32(i) * 2.3999;
+        let rr = r * (0.3 + 0.7 * fract(f32(i) * 0.618 + 0.13));
+        let sp = px + vec2<i32>(vec2<f32>(cos(a), sin(a)) * rr);
+        if (any(sp < vec2<i32>(0)) || any(sp >= vec2<i32>(G.screen.xy))) { continue; }
+        let q = world_at(sp);
+        if (q.w >= 0.99999) { continue; }
+        let dz = dist - length(q.xyz - ro);
+        if (dz > 0.04 && dz < 0.9) { occ = occ + (1.0 - dz / 0.9); }
+    }
+    return 1.0 - 0.55 * clamp(occ / 8.0, 0.0, 1.0) * smoothstep(45.0, 25.0, dist);
+}
+
+// filmic tone curve (ACES fit): rich mid-tones, highlights that roll off instead of clipping
+fn aces(x: vec3<f32>) -> vec3<f32> {
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 @fragment
 fn fs_post(in: FsIn) -> @location(0) vec4<f32> {
     var uv = in.uv;
@@ -47,6 +79,13 @@ fn fs_post(in: FsIn) -> @location(0) vec4<f32> {
     let strain = G.fx.w;
     let px = vec2<i32>(clamp(uv, vec2<f32>(0.0), vec2<f32>(0.999)) * G.screen.xy);
     var col = textureLoad(t_scene, px, 0).rgb;
+    if (G.post.x < 0.5) {
+        // a lens's lateral fringing, only towards the edges of the frame
+        let e = (uv - 0.5) * dot(uv - 0.5, uv - 0.5) * 0.012;
+        let pr = vec2<i32>(clamp(uv + e, vec2<f32>(0.0), vec2<f32>(0.999)) * G.screen.xy);
+        let pb = vec2<i32>(clamp(uv - e, vec2<f32>(0.0), vec2<f32>(0.999)) * G.screen.xy);
+        col = vec3<f32>(textureLoad(t_scene, pr, 0).r, col.g, textureLoad(t_scene, pb, 0).b);
+    }
     if (strain > 0.01) {
         let off = (uv - 0.5) * 0.012 * strain * (1.0 + 0.5 * sin(G.cam_pos.w * 7.0));
         let pr = vec2<i32>(clamp(uv + off, vec2<f32>(0.0), vec2<f32>(0.999)) * G.screen.xy);
@@ -69,6 +108,9 @@ fn fs_post(in: FsIn) -> @location(0) vec4<f32> {
         let sd = max(dot(rd, G.sun_dir.xyz), 0.0);
         col = G.fog_col.rgb * (0.55 + 0.6 * (1.0 - up)) + G.sun_col.rgb * (pow(sd, 400.0) * 6.0 + pow(sd, 8.0) * 0.15);
         dist = G.fog_par.z;
+    }
+    if (!sky) {
+        col = col * ssao(px, dist, ro, in.pos.xy);
     }
     dist = min(dist, G.fog_par.z);
 
@@ -109,13 +151,18 @@ fn fs_post(in: FsIn) -> @location(0) vec4<f32> {
 
     // tonemap + grade
     col = col * G.grade.rgb;
-    col = col / (col + vec3<f32>(0.85)) * 1.25;
+    col = aces(col * 1.05);
     let l = dot(col, vec3<f32>(0.3, 0.55, 0.15));
     col = mix(vec3<f32>(l), col, G.grade.w);
     let vg = length((in.uv - 0.5) * vec2<f32>(1.1, 1.0));
     col = col * (1.0 - G.fx.z * smoothstep(0.35, 0.9, vg));
     col = mix(col, col * vec3<f32>(1.25, 0.7, 1.3), strain * smoothstep(0.2, 0.75, vg) * (0.7 + 0.3 * sin(G.cam_pos.w * 3.0)));
     col = pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+    if (G.post.x < 0.5) {
+        // no retro filter: a fine film grain, stronger in the shadows
+        let lum = dot(col, vec3<f32>(0.3, 0.55, 0.15));
+        col = col + (hash21(in.pos.xy + vec2<f32>(G.cam_pos.w * 37.0, G.cam_pos.w * 91.0)) - 0.5) * 0.045 * (1.0 - lum * 0.7);
+    }
     col = mix(col, vec3<f32>(1.0), G.counts.w);
     col = col * (1.0 - G.counts.z);
     // palette quantisation with ordered dithering
