@@ -1,0 +1,33 @@
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "strain"
+version = "0.1.0"
+edition = "2021"
+description = "STRAIN - a third-person action game about a compatible host in an infected city"
+license = "MIT"
+
+[dependencies]
+wgpu = "30"
+winit = "0.30"
+gilrs = "0.11"
+cpal = "0.18"
+glam = { version = "0.34", features = ["bytemuck", "serde"] }
+bytemuck = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+ron = "0.12"
+directories = "6"
+fastrand = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

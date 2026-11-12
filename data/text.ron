@@ -1,0 +1,53 @@
+(
+notes: [
+  "DAY 3. They closed Harrow Bridge with the buses still on it. Mum says the army knows what it is doing. The army does not look like it knows what it is doing.",
+  "NOTICE: Residents presenting fever, joint pain or 'a feeling of being arranged' must report to a Burn Pit for assessment. Do not shelter the symptomatic. - Cordon Command",
+  "if you find this - he didnt turn like the others. it went INTO him and it stopped. they call it compatible. they took him to the stadium. i dont think they know what to do with him either",
+  "Sgt. Okafor's log: Lost Market Row again at 0400. Took it back at 0900. Lost it at noon. The line moves every time we light the pits. Like it breathes.",
+  "The ones in the Bloom don't chase you. They wait. The streets there are soft. Don't lie down. Whatever you do don't lie down.",
+  "FIELD MEMO: Fire works. Fire always works. Everything else is a negotiation.",
+  "It isn't a disease. Diseases don't build things. Go and look at the tenements on Sixth and tell me that isn't architecture.",
+  "To whoever has my flat now: the plant in the window was not mine. It was there when I came back. I think it is listening.",
+  "Rift survey, fragment C: interior volume exceeds exterior by a factor we have stopped trying to calculate. Team 2 heard singing. Team 2 has not come back.",
+  "They say the husks remember. Corporal Lindqvist's came back to the checkpoint and stood his post for an hour before it did anything else.",
+  "I counted four fragments coming down, and then the big one. Five lights. Everyone remembers one. Why does everyone remember one?",
+  "You feel it too, don't you. The pull, when you use it. Like leaning over a railing. Hit something. It helps. I don't know why it helps.",
+],
+graffiti: ["NO ONE IS COMING", "BURN IT ALL", "THEY ARE STILL IN THERE", "COMPATIBLE = TRAITOR", "DONT SLEEP", "5 LIGHTS", "GOD IS A ROCK", "STAY LOUD", "MUM IM AT THE STADIUM", "IT LIKES YOU"],
+soldier_barks: [
+  "Keep your hands where I can see them, host.", "Command says you're on our side. Command says a lot.", "You go out there, you come back through the pit. No exceptions.",
+  "Don't stand so close.", "My brother turned on day two. You don't look so different.", "You hear it too? The humming? ...Forget it.",
+  "Pit's lit. Rest if you have to.", "They say you can't turn. I say you already did.", "Bring something back worth burning.",
+],
+soldier_mutated: [
+  "Christ. Look at the state of him.", "That's new. That wasn't there yesterday.", "Safety off. Just in case.", "How much of you is left in there?",
+  "Don't let the kids see you.", "One more of those growths and I call it in.",
+],
+radio: [
+  "...Cordon to all points, front line has moved, repeat, the line has moved...", "...lost contact with Market Row checkpoint, sending...", "...helo two has eyes on a bloom event, two streets north...",
+  "...any station, any station, this is Rail Yard, we are still here...", "...do not engage the tall ones, repeat, do not...", "...the pits are burning low, we need fuel at...",
+  "...fragment site is singing again, pull back to...", "...confirm the compatible is outside the wire...",
+],
+civilian: ["Please. Please don't.", "Are you with them? The army?", "It took the whole street.", "Don't look at me. Don't look.", "You're one of them. You're one of THEM."],
+opening: [
+  "Eleven days ago, five lights fell on the city.",
+  "What came with them does not kill. It rearranges.",
+  "The army burned what it could and fenced in the rest.",
+  "It got into you on the fourth day. It should have taken you apart.",
+  "Instead it stopped. It settled. It is waiting to see what you will do.",
+  "They call that compatible. They opened the gate and pointed at the dark.",
+],
+ending: [
+  "The Seed comes apart like wet paper.",
+  "Across the city, everything it grew goes still.",
+  "The humming stops. For the first time in eleven days you are alone in your own head.",
+  "Almost alone.",
+  "The pits burn until morning. The gate opens. No one asks what you are any more.",
+  "STRAIN",
+],
+tips: [
+  "STRAIN ONLY FALLS WHEN YOU LAND MELEE HITS.", "BLOCK JUST BEFORE A BLOW LANDS TO STAGGER THE ATTACKER, THEN STRIKE TO RUPTURE.",
+  "RESTING AT A BURN PIT RE-SEEDS EVERY INFECTION IN THE CITY.", "DIE BEFORE REACHING YOUR HUSK AND IT RISES WITH YOUR BUILD.",
+  "CINDER HURTS EVERYTHING INFECTED. THAT INCLUDES YOU.", "HIGH STRAIN MAKES SPELLS STRONGER AND YOUR BODY LESS RELIABLE.",
+],
+)
