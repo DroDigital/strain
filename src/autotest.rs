@@ -5,6 +5,61 @@ use crate::input::{Action, Input};
 use crate::render::Renderer;
 use glam::Vec3;
 
+const ZOO_SHOTS: [&str; 14] = ["zoo_rusher", "zoo_rusher2", "zoo_brute", "zoo_leaper", "zoo_spitter", "zoo_crawler", "zoo_shielded", "zoo_ambusher", "zoo_summoner", "zoo_boss0", "zoo_boss1", "zoo_boss2", "zoo_boss3", "zoo_boss4"];
+static ZOO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Clear the stage and put the next zoo subject three metres in front of the camera.
+fn zoo_next(g: &mut Game) {
+    let i = ZOO.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let ids: Vec<u32> = g.w.ai.ids().collect();
+    for id in ids {
+        let e = g.w.ent(id);
+        if e != g.player {
+            g.w.despawn(e);
+        }
+    }
+    g.w.flush();
+    let p = g.ppos();
+    let boss = i >= 9;
+    let at = p + if boss { Vec3::new(-2.6, 0.0, 2.0) } else { Vec3::new(-1.1, 0.0, 1.9) };
+    let kinds = ["rusher", "rusher", "brute", "leaper", "spitter", "crawler", "shielded", "ambusher", "summoner"];
+    let e = if i < kinds.len() {
+        // re-roll the rusher until it gets the other model
+        let mut e = g.spawn_archetype(kinds[i], at, 1, 8, None);
+        for _ in 0..12 {
+            let want = if i == 1 { "Strain_Shambler" } else { "" };
+            let has = g.w.rig.get(e).and_then(|r| r.skin.as_ref()).map(|s| g.lib.models[s.model].name.clone()).unwrap_or_default();
+            if want.is_empty() || has == want {
+                break;
+            }
+            g.w.despawn(e);
+            g.w.flush();
+            e = g.spawn_archetype(kinds[i], at, 1, 8, None);
+        }
+        Some(e)
+    } else {
+        let bi = i - kinds.len();
+        g.prof.bosses[bi] = false;
+        g.spawn_boss(bi, at + Vec3::new(0.0, 0.0, 2.5))
+    };
+    g.cam.dist = if boss { 6.0 } else { 3.0 };
+    g.cam.pitch = 0.1;
+    g.cam.yaw = 0.0;
+    if let Some(e) = e {
+        if let Some(b) = g.w.body.get_mut(e) {
+            b.yaw = std::f32::consts::PI;
+        }
+        if let Some(ai) = g.w.ai.get_mut(e) {
+            ai.cd = 99.0;
+            ai.think = 99.0;
+            ai.special_cd = 99.0;
+        }
+        if let Some(a) = g.w.actor.get_mut(e) {
+            a.speed = 0.0;
+        }
+    }
+}
+
 pub enum Step {
     Wait(u32),
     Hold(Action, u32),
@@ -103,6 +158,32 @@ impl AutoTest {
                 Shot("boss_look"),
                 Log("look done"),
             ],
+            "zoo" => {
+                // each custom infected and boss up close, mid-animation, in daylight
+                let mut v = vec![
+                    Wait(10),
+                    Do(|g| {
+                        std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                        g.new_game();
+                        g.tod = 0.42;
+                        let p = crate::world::chunk_center(1, (2, 2)) + Vec3::new(-24.5, 0.0, -10.0);
+                        teleport(g, p);
+                        g.cam.yaw = 0.0;
+                        if let Some(a) = g.w.actor.get_mut(g.player) {
+                            a.max_hp = 1e9;
+                            a.hp = 1e9;
+                        }
+                    }),
+                    Wait(20),
+                ];
+                for name in ZOO_SHOTS {
+                    v.push(Do(zoo_next));
+                    v.push(Wait(26));
+                    v.push(Shot(name));
+                }
+                v.push(Log("zoo done"));
+                v
+            }
             "roam" => vec![
                 Wait(10),
                 Do(|g| {

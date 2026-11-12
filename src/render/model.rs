@@ -196,15 +196,22 @@ pub fn load(name: &str, bytes: &[u8]) -> Option<Model> {
             let atlas = mat.name() == Some("Atlas");
             let f = mat.pbr_metallic_roughness().base_color_factor();
             let emis = mat.emissive_factor();
-            let e = (emis[0].max(emis[1]).max(emis[2]) * 255.0) as u8;
-            let color = [(f[0].powf(1.0 / 2.2) * 255.0) as u8, (f[1].powf(1.0 / 2.2) * 255.0) as u8, (f[2].powf(1.0 / 2.2) * 255.0) as u8, e];
-            let layer = if atlas { ATLAS_LAYER } else { 0.0 };
+            let e = emis[0].max(emis[1]).max(emis[2]);
+            // `T:<Tex>` materials (the custom infected) sample one of the game's texture layers
+            let layer = if atlas { ATLAS_LAYER } else { mat.name().and_then(tex_layer).unwrap_or(0.0) };
+            // vertex colours multiply the material colour; alpha below 1 marks emission
+            let vcol: Vec<[f32; 4]> = r.read_colors(0).map(|c| c.into_rgba_f32().collect()).unwrap_or_else(|| vec![[1.0; 4]; pos.len()]);
+            let colour = |i: usize| -> [u8; 4] {
+                let c = vcol[i];
+                let ch = |k: usize| ((f[k] * c[k]).clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+                [ch(0), ch(1), ch(2), (e.max(1.0 - c[3]).clamp(0.0, 1.0) * 255.0) as u8]
+            };
             if skinned {
                 let joints: Vec<[u16; 4]> = r.read_joints(0).map(|j| j.into_u16().collect()).unwrap_or_else(|| vec![[0; 4]; pos.len()]);
                 let weights: Vec<[f32; 4]> = r.read_weights(0).map(|w| w.into_f32().collect()).unwrap_or_else(|| vec![[1.0, 0.0, 0.0, 0.0]; pos.len()]);
                 let base = model.skin_verts.len() as u32;
                 for i in 0..pos.len() {
-                    model.skin_verts.push(SkinVertex { pos: pos[i], normal: nrm[i], uv: [uv[i][0], uv[i][1], layer], color, joints: joints[i], weights: weights[i] });
+                    model.skin_verts.push(SkinVertex { pos: pos[i], normal: nrm[i], uv: [uv[i][0], uv[i][1], layer], color: colour(i), joints: joints[i], weights: weights[i] });
                 }
                 model.skin_idx.extend(idx.iter().map(|i| i + base));
             } else {
@@ -214,7 +221,7 @@ pub fn load(name: &str, bytes: &[u8]) -> Option<Model> {
                     let p = gm.transform_point3(Vec3::from(pos[i]));
                     model.min = model.min.min(p);
                     model.max = model.max.max(p);
-                    model.mesh.verts.push(Vertex { pos: p.into(), normal: nm.transform_vector3(Vec3::from(nrm[i])).normalize_or_zero().into(), uv: [uv[i][0], uv[i][1], layer], color });
+                    model.mesh.verts.push(Vertex { pos: p.into(), normal: nm.transform_vector3(Vec3::from(nrm[i])).normalize_or_zero().into(), uv: [uv[i][0], uv[i][1], layer], color: colour(i) });
                 }
                 model.mesh.idx.extend(idx.iter().map(|i| i + base));
             }
@@ -228,6 +235,12 @@ pub fn load(name: &str, bytes: &[u8]) -> Option<Model> {
         }
     }
     Some(model)
+}
+
+/// Texture-array layer for a material named `T:<Tex>`.
+fn tex_layer(name: &str) -> Option<f32> {
+    let t: crate::render::textures::Tex = ron::from_str(name.strip_prefix("T:")?).ok()?;
+    Some(t as u32 as f32)
 }
 
 /// Every embedded model, by file stem.
@@ -419,6 +432,47 @@ impl Library {
         v.into_iter().map(|(_, m)| (m.skin_verts.clone(), m.skin_idx.clone())).collect()
     }
 }
+#[cfg(test)]
+mod infected_tests {
+    /// The Blender-built infected keep their base model's skeleton and clips exactly (clips are
+    /// shared between models by bone name) and their new parts resolve to real texture layers.
+    #[test]
+    fn custom_infected_match_their_bases() {
+        let all = super::load_all();
+        let get = |n: &str| all.iter().find(|m| m.name == n).unwrap_or_else(|| panic!("missing model {n}"));
+        let pairs = [
+            ("Strain_Carrier", "Zombie_Basic"),
+            ("Strain_Shambler", "Zombie_Arm"),
+            ("Strain_Bulk", "Zombie_Chubby"),
+            ("Strain_Retch", "Zombie_Chubby"),
+            ("Strain_Larva", "Zombie_Ribcage"),
+            ("Strain_Bulwark", "Zombie_Basic"),
+            ("Strain_Lurker", "Zombie_Arm"),
+            ("Strain_Matron", "Zombie_Chubby"),
+            ("Strain_Skitter", "Characters_GermanShepherd"),
+            ("Strain_Digestor", "Zombie_Chubby"),
+            ("Strain_Geometer", "Zombie_Basic"),
+            ("Strain_MotherCinder", "Zombie_Chubby"),
+            ("Strain_Cantor", "Zombie_Basic"),
+            ("Strain_Seed", "Zombie_Arm"),
+        ];
+        for (custom, base) in pairs {
+            let (c, b) = (get(custom), get(base));
+            assert!(c.skinned(), "{custom} is not skinned");
+            let names = |m: &super::Model| m.skeleton.joints.iter().map(|j| (j.name.clone(), j.r.to_array().map(|x| (x * 1e4).round() as i32))).collect::<Vec<_>>();
+            assert_eq!(names(c), names(b), "{custom} skeleton differs from {base}");
+            assert_eq!(c.clips.len(), b.clips.len(), "{custom} clips differ from {base}");
+            assert!(c.skin_verts.len() > b.skin_verts.len(), "{custom} has no new parts");
+            let layers: std::collections::HashSet<i32> = c.skin_verts.iter().map(|v| v.uv[2] as i32).collect();
+            assert!(layers.iter().any(|&l| l > 0 && l < 250), "{custom} has no texture-layer parts");
+            assert!(!layers.contains(&0), "{custom} has a part with an unknown material");
+            let n = c.skin_verts.len() as u32;
+            assert!(c.skin_idx.iter().all(|&i| i < n), "{custom} index out of range");
+            assert!(c.skin_verts.iter().all(|v| (v.weights.iter().sum::<f32>() - 1.0).abs() < 0.02), "{custom} weights not normalised");
+        }
+    }
+}
+
 #[cfg(test)]
 mod size_tests {
     #[test]
