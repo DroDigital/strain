@@ -820,7 +820,7 @@ impl Renderer {
         g.fog_col = e.fog_col.extend(e.fog_density).into();
         let steps = [6.0, 12.0, 24.0][self.settings.fog_quality.min(2) as usize];
         g.fog_par = [e.fog_height, steps, 110.0, e.light_scatter];
-        g.screen = [t.w as f32, t.h as f32, 1.0, 0.05];
+        g.screen = [t.w as f32, t.h as f32, 1.0, 0.0];
         g.grade = e.grade.extend(e.saturation).into();
         g.fx = [e.levels, e.dither, e.vignette, e.strain];
         let nl = f.lights.len().min(32);

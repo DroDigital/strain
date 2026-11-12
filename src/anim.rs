@@ -256,6 +256,11 @@ impl Rig {
         }
     }
 
+    /// True while any foot is mid-step.
+    pub fn stepping(&self) -> bool {
+        self.feet.iter().any(|f| f.t < 1.0)
+    }
+
     fn chain(&mut self, idx: &mut usize, n: usize, seg: f32) -> usize {
         let i = *idx;
         if self.chains.len() <= i {
@@ -622,7 +627,7 @@ impl Rig {
                 let k = smooth(f.t);
                 f.pos = f.from.lerp(f.to, k) + Vec3::Y * ((k * PI).sin() * 0.16 * s);
             } else {
-                let d = (f.pos - home_w).length();
+                let d = Vec3::new(f.pos.x - home_w.x, 0.0, f.pos.z - home_w.z).length();
                 let thresh = if moving { 0.32 * ll } else { 0.12 * ll } * if spider { 0.8 } else { 1.0 };
                 let other = any_stepping_group[(i + 1) % 2];
                 if d > thresh && (!other || d > thresh * 2.5) {
@@ -630,7 +635,7 @@ impl Rig {
                     f.to = home_w;
                     f.t = 0.0;
                 }
-                f.pos.y = 0.0_f32.max(f.pos.y - dt * 3.0).max(0.0);
+                f.pos.y = if f.pos.y > pos.y { (f.pos.y - dt * 3.0).max(pos.y) } else { pos.y };
             }
             let mut foot_l = flat_inv.transform_point3(self.feet[i].pos);
             let wf = |q: Vec3| root.transform_point3(q);

@@ -130,6 +130,9 @@ impl Game {
             let vel = b.vel + b.push;
             if let Some(rig) = self.w.rig.get_mut(e) {
                 rig.update_emit(dt, pos, yaw, vel, &pose, &mut self.inst);
+                if e == self.player && rig.stepping() {
+                    self.bug_steps += 1;
+                }
             }
         }
 

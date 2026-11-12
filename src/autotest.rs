@@ -36,6 +36,54 @@ impl AutoTest {
         use Step::*;
         let steps: Vec<Step> = match name.as_str() {
             "title" => vec![Wait(40), Shot("title")],
+            "bugs" => vec![
+                Wait(10),
+                Do(|g| {
+                    std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                    g.new_game();
+                    // stand on a raised sidewalk
+                    let p = crate::world::chunk_center(0, (3, 2)) + Vec3::new(-20.0, 0.12, -20.0);
+                    teleport(g, p);
+                    g.bug_steps = 0;
+                }),
+                Wait(30),
+                Do(|g| g.bug_steps = 0),
+                Wait(120),
+                Do(|g| eprintln!("autotest: idle on kerb y={:.2}: frames spent stepping {} of 120", g.ppos().y, g.bug_steps)),
+                Shot("idle"),
+                Do(|g| {
+                    let y0 = g.cam.yaw;
+                    g.bug_yaw = y0;
+                }),
+                Do(|g| {
+                    let pp = g.ppos();
+                    let before = g.cam.view().inverse().x_axis.truncate();
+                    g.cam.update(1.0 / 60.0, glam::Vec2::new(0.3, 0.0), false, pp, None, &g.area, 0.0);
+                    let fwd_after = (g.cam.target - g.cam.eye).normalize();
+                    // turning right means the new forward leans toward the old screen-right
+                    eprintln!("autotest: mouse right turns view right: {} (dot {:.2})", fwd_after.dot(before) > 0.0, fwd_after.dot(before));
+                }),
+                Do(|g| {
+                    let p = g.ppos();
+                    let pe = g.player;
+                    let mut first = None;
+                    for k in 0..3 {
+                        let s = g.spawn_soldier(p + Vec3::new(k as f32 * 1.5, 0.0, 12.0), 77, 3);
+                        first.get_or_insert(s);
+                    }
+                    g.anger_squad(first.unwrap());
+                    if let Some(a) = g.w.actor.get_mut(pe) { a.max_hp = 2000.0; a.hp = 2000.0; }
+                    // look away so the soldiers are off screen
+                    g.cam.yaw = std::f32::consts::PI;
+                }),
+                Wait(300),
+                Do(|g| eprintln!("autotest: player hp after 10 s of hostile soldiers: {:.0}/2000", g.w.actor.get(g.player).unwrap().hp)),
+                Shot("soldiers"),
+                Do(|g| { g.cam.pitch = 0.05; }),
+                Wait(10),
+                Shot("floor"),
+                Log("bugs done"),
+            ],
             "duel" => vec![
                 Wait(10),
                 Do(|g| {

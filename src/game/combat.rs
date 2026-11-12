@@ -71,6 +71,29 @@ impl Game {
         best.map(|b| b.0)
     }
 
+    /// Soldiers who are hit by the player turn on them, and so does the rest of the squad.
+    pub fn anger_squad(&mut self, t: Entity) {
+        let Some(squad) = self.w.ai.get(t).map(|a| a.summons) else { return };
+        let p = self.w.body.get(t).map(|b| b.pos).unwrap_or(Vec3::ZERO);
+        let ids: Vec<u32> = self.w.ai.ids().collect();
+        for id in ids {
+            let e = self.w.ent(id);
+            let same = self.w.ai.get(e).map(|a| a.kind == AiKind::Soldier && (a.summons == squad || e == t)).unwrap_or(false);
+            let near = self.w.body.get(e).map(|b| (b.pos - p).length() < 30.0).unwrap_or(false);
+            if same && near {
+                let pe = self.player;
+                let ai = self.w.ai.get_mut(e).unwrap();
+                ai.grudge = (ai.grudge.max(0.0) + if e == t { 45.0 } else { 35.0 }).max(65.0);
+                ai.target = Some(pe);
+                ai.think = 0.0;
+            }
+        }
+        if self.pl.soldiers_angered == 0 {
+            self.msg("THE SQUAD TURNS ITS RIFLES ON YOU");
+        }
+        self.pl.soldiers_angered += 1;
+    }
+
     pub fn noise(&mut self, p: Vec3, r: f32) {
         self.noises.push((p, r));
     }
@@ -162,7 +185,8 @@ impl Game {
                 let foe = self.w.ai.get(e).and_then(|ai| ai.target);
                 let tp = foe.and_then(|t| self.w.body.get(t)).map(|b| b.center()).unwrap_or(body.center() + fwd * 10.0);
                 let rig = self.w.rig.get(e);
-                let origin = rig.map(|r| if mv.swing == Swing::Shoot { r.weapon_tip } else { r.head }).unwrap_or(body.center());
+                // rig anchors are only refreshed while the actor is drawn; fall back when stale
+                let origin = rig.map(|r| if mv.swing == Swing::Shoot { r.weapon_tip } else { r.head }).filter(|o| (*o - body.center()).length() < 2.5).unwrap_or(body.center() + fwd * 0.5);
                 let dmg = self.w.actor.get(e).unwrap().dmg * mv.dmg;
                 let team = self.w.actor.get(e).unwrap().team;
                 if mv.swing == Swing::Shoot {
@@ -394,9 +418,7 @@ impl Game {
             }
         }
         if self.w.actor.get(t).map(|a| a.team == Team::Military).unwrap_or(false) {
-            if let Some(ai) = self.w.ai.get_mut(t) {
-                ai.grudge += 25.0;
-            }
+            self.anger_squad(t);
         }
         // hit-stop scaled by weight
         self.hitstop = self.hitstop.max(if a.heavy { 0.09 + a.charge * 0.05 } else { 0.05 });

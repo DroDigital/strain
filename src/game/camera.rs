@@ -49,7 +49,7 @@ impl Camera {
                 self.pitch += (want_p - self.pitch) * (dt * 4.0).min(1.0);
             }
             None => {
-                self.yaw += look.x;
+                self.yaw -= look.x;
                 self.pitch += look.y * if invert { -1.0 } else { 1.0 };
             }
         }
