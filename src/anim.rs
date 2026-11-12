@@ -42,6 +42,9 @@ pub struct BodyPlan {
     pub leg_thick: f32,
     pub leg_count: u8,
     pub growths: Vec<Growth>,
+    /// how many of `growths` belong to the archetype or boss itself (the rest come from affixes);
+    /// models with those growths built in drop them
+    pub base_growths: usize,
     pub skin: [f32; 3],
     pub cloth: [f32; 3],
     pub legs_tint: [f32; 3],
@@ -70,6 +73,7 @@ impl BodyPlan {
             leg_thick: 0.13,
             leg_count: 2,
             growths: Vec::new(),
+            base_growths: 0,
             skin: [1.0, 1.0, 1.0],
             cloth: [0.35, 0.38, 0.42],
             legs_tint: [0.25, 0.27, 0.32],

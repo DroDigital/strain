@@ -10,9 +10,13 @@ glam, bytemuck, serde/ron, directories, fastrand, plus gltf and png for reading 
 — renderer, skinning, animation blending, ECS, physics, AI, mixer — is custom; the art and sound
 combine CC0 (public domain) assets with procedural generation:
 
-- **Characters, zombies, weapons, vehicles and street props**: Quaternius *Zombie Apocalypse Kit*
-  (rigged, animated glTF), with Lovecraftian growths, mutated limbs and heads built procedurally
-  and attached to the skeletons.
+- **Characters, weapons, vehicles and street props**: Quaternius *Zombie Apocalypse Kit* (rigged,
+  animated glTF).
+- **The infected**: fourteen custom models (every archetype and boss) made in Blender on top of
+  the kit's zombie rigs. Bone spikes, tentacles, tumours, chitin plates, maws, crystals and glowing
+  sacs are modelled in and skinned to the original skeletons. The bodies are reshaped and
+  repainted with veins, bruising, blood and ember cracks, and ambient occlusion is baked in.
+  Affixes and mutations still add procedural growths on top.
 - **Surfaces**: ambientCG photo textures, combined with procedural windows, signs, veins and glow.
 - **Sound effects and ambience**: recorded CC0 packs from OpenGameArt, several variants per sound.
 - **Music**, UI sounds, sirens and radio: synthesised in real time.
@@ -103,6 +107,20 @@ F3 shows the frame rate, F11 toggles borderless fullscreen, F12 saves a screensh
 ffmpeg); the processed files are committed, so building never needs the network. Add a source by
 extending the tables at the top of the script.
 
+The infected (`assets/models/Strain_*.glb`) are built by `tools/blender/build_enemies.py`. The
+recipes are in `tools/blender/recipes.py`. Run it with any Python that can `import bpy` (Blender's
+own, or `pip install bpy`):
+
+```bash
+python -I tools/blender/build_enemies.py                                  # every model
+python -I tools/blender/build_enemies.py Strain_Bulk --preview /tmp/prev  # one, with Cycles renders
+```
+
+The builder splices new geometry into the original GLB, so the skeleton and animation clips stay
+byte-for-byte identical (clips are shared between models by bone name). New parts use materials
+named `T:<Tex>`, which select one of the game's texture layers. A vertex colour alpha below 1
+marks emission.
+
 ## Look
 
 Pseudo-retro with modern technique: low-poly geometry, 64 px nearest-filtered textures, vertex
@@ -123,6 +141,7 @@ windowed / borderless / fullscreen.
 | `world/` | districts, building kit, chunk streaming, rift dungeons |
 | `anim.rs` | skinned-character controller (clip selection, crossfades, attack sync), procedural growths, IK, verlet chains |
 | `render/model.rs` | glTF loading, skeletons, clip sampling and retargeting |
+| `tools/blender/` | Blender builder and recipes for the custom infected |
 | `assets.rs`, `build.rs` | embedded asset table, PNG and WAV decoding |
 | `game/combat.rs` | action phases, melee resolution, damage pipeline, projectiles, zones |
 | `game/ai.rs` | perception, steering, archetypes, affixes, soldiers, civilians, bosses |
@@ -143,7 +162,8 @@ changes. `cargo test` validates the tables and the content minimums.
 
 `STRAIN_AUTOTEST=<scenario>` drives the real game with scripted input and saves screenshots to
 `STRAIN_SHOT_DIR`: `tour` (districts, combat, menus, every rift, a boss, death and respawn),
-`look` (every character model and archetype lined up), `bugs` (regression checks for fixed bugs),
+`look` (every character model and archetype lined up), `zoo` (each custom infected and boss
+close up), `bugs` (regression checks for fixed bugs),
 `roam` (walks every district checking for stuck or embedded states), `duel` (a combat bot fights a
 street pack and the first boss),
 `spells` (all 18 spells), `stress` (every mutation and unique, every archetype at every stage),

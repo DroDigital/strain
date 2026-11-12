@@ -47,3 +47,4 @@ Regenerate with `python3 tools/fetch_assets.py`.
 | audio | audio/* (sword) | 20 Sword Sound Effects (StarNinjas) | https://opengameart.org/content/20-sword-sound-effects-attacks-and-clashes | CC0 1.0 |
 | audio | audio/* (water) | 40 CC0 water/splash/slime SFX (rubberduck) | https://opengameart.org/content/40-cc0-water-splash-slime-sfx | CC0 1.0 |
 | audio | audio/* (zombie) | Zombies Sound Pack (artisticdude) | https://opengameart.org/content/zombies-sound-pack | CC0 1.0 |
+| infected | models/Strain_*.glb | Custom infected modelled in Blender by `tools/blender/build_enemies.py` on top of the Quaternius Zombie Apocalypse Kit characters (same skeletons and animations) | https://quaternius.com/packs/zombieapocalypsekit.html | CC0 1.0 |

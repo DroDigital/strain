@@ -105,6 +105,7 @@ impl Game {
             let g = *pick(r, &pool);
             p.growths.push(Growth { kind: g.0, at: g.1, tex: g.2, size: rf(r, 0.7, 1.3) });
         }
+        p.base_growths = p.growths.len();
         // colours: stage I keeps clothes; later stages lose them
         let pale = rf(r, 0.6, 0.95);
         p.skin = match stage {
@@ -145,6 +146,8 @@ impl Game {
         let pick = |opts: &[&'static str]| opts[(seed as usize) % opts.len()];
         let arch = foe.as_ref().map(|f| self.t.archetypes[f.arch].id.clone()).unwrap_or_default();
         let humans = ["Characters_Matt_SingleWeapon", "Characters_Lis_SingleWeapon", "Characters_Sam_SingleWeapon", "Characters_Shaun_SingleWeapon"];
+        // Strain_* models are the custom infected built in Blender (tools/blender): their mutations
+        // are modelled in, so they hide no bones and drop the archetype's procedural growths
         let (model, kind, scale, crawl, gun, tint): (&str, SkinKind, f32, bool, bool, [f32; 3]) = if e == self.player {
             ("Characters_Matt_SingleWeapon", SkinKind::Human, 1.0, false, false, [1.0; 3])
         } else if foe.as_ref().map(|f| f.mimic).unwrap_or(false) {
@@ -152,22 +155,27 @@ impl Game {
         } else if foe.as_ref().map(|f| f.husk).unwrap_or(false) {
             ("Characters_Matt_SingleWeapon", SkinKind::Human, 1.0, false, false, [0.45, 0.4, 0.5])
         } else if let Some(bi) = foe.as_ref().and_then(|f| f.boss) {
-            let m = ["Zombie_Chubby", "Zombie_Ribcage", "Zombie_Arm", "Zombie_Ribcage", "Zombie_Chubby"][bi.min(4)];
-            let tint = self.t.bosses[bi].tint;
-            (m, SkinKind::Zombie, 1.0, false, false, [tint.0, tint.1, tint.2])
+            let m = ["Strain_Digestor", "Strain_Geometer", "Strain_MotherCinder", "Strain_Cantor", "Strain_Seed"][bi.min(4)];
+            (m, SkinKind::Zombie, if bi == 4 { 0.85 } else { 1.0 }, false, false, [1.0; 3])
         } else {
             match ai {
                 AiKind::Soldier => (pick(&["Characters_Shaun_SingleWeapon", "Characters_Sam_SingleWeapon"]), SkinKind::Human, 1.0, false, true, [0.72, 0.82, 0.62]),
                 AiKind::Civilian => (pick(&humans), SkinKind::Human, 0.97, false, false, [1.0; 3]),
-                AiKind::Ally => ("Zombie_Ribcage", SkinKind::Zombie, 0.42, true, false, [0.6, 1.0, 0.6]),
-                AiKind::Crawler => ("Zombie_Ribcage", SkinKind::Zombie, 0.5, true, false, [1.0, 0.85, 0.9]),
-                AiKind::Leaper if arch == "leaper" => ("Characters_GermanShepherd", SkinKind::Dog, 0.5, false, false, [0.8, 0.6, 0.65]),
-                AiKind::Brute | AiKind::Summoner => ("Zombie_Chubby", SkinKind::Zombie, 1.1, false, false, [1.0; 3]),
-                AiKind::Spitter => (pick(&["Zombie_Chubby", "Zombie_Basic"]), SkinKind::Zombie, 1.0, false, false, [1.0; 3]),
-                AiKind::Ambusher => ("Zombie_Ribcage", SkinKind::Zombie, 1.05, false, false, [1.0; 3]),
-                _ => (pick(&["Zombie_Basic", "Zombie_Arm", "Zombie_Basic", "Zombie_Ribcage"]), SkinKind::Zombie, 1.0, false, false, [1.0; 3]),
+                AiKind::Ally => ("Strain_Larva", SkinKind::Zombie, 0.65, false, false, [0.6, 1.0, 0.6]),
+                AiKind::Crawler => ("Strain_Larva", SkinKind::Zombie, 0.75, false, false, [1.0; 3]),
+                AiKind::Leaper if arch == "leaper" => ("Strain_Skitter", SkinKind::Dog, 0.7, false, false, [1.0; 3]),
+                AiKind::Brute => ("Strain_Bulk", SkinKind::Zombie, 1.1, false, false, [1.0; 3]),
+                AiKind::Summoner => ("Strain_Matron", SkinKind::Zombie, 1.05, false, false, [1.0; 3]),
+                AiKind::Spitter => ("Strain_Retch", SkinKind::Zombie, 1.0, false, false, [1.0; 3]),
+                AiKind::Ambusher => ("Strain_Lurker", SkinKind::Zombie, 0.85, false, false, [1.0; 3]),
+                AiKind::Shielded => ("Strain_Bulwark", SkinKind::Zombie, 1.1, false, false, [1.0; 3]),
+                _ => match pick(&["Strain_Carrier", "Strain_Shambler", "Strain_Carrier"]) {
+                    "Strain_Shambler" => ("Strain_Shambler", SkinKind::Zombie, 0.85, false, false, [1.0; 3]),
+                    m => (m, SkinKind::Zombie, 1.05, false, false, [1.0; 3]),
+                },
             }
         };
+        let baked = model.starts_with("Strain_");
         let Some(mut sk) = SkinRig::new(&lib, model, kind) else { return };
         sk.scale = scale;
         sk.crawl = crawl;
@@ -180,7 +188,13 @@ impl Game {
             _ => [1.0; 3],
         };
         sk.tint = [tint[0] * stage_tint[0], tint[1] * stage_tint[1], tint[2] * stage_tint[2]];
-        if let Some(rig) = self.w.rig.get(e) {
+        if baked {
+            if let Some(rig) = self.w.rig.get_mut(e) {
+                let n = rig.plan.base_growths.min(rig.plan.growths.len());
+                rig.plan.growths.drain(..n);
+                rig.plan.base_growths = 0;
+            }
+        } else if let Some(rig) = self.w.rig.get(e) {
             let p = rig.plan.clone();
             if kind != SkinKind::Dog {
                 if matches!(p.head, HeadKind::Bloom | HeadKind::Cluster | HeadKind::Stalk | HeadKind::Crown | HeadKind::None) {
@@ -477,6 +491,7 @@ impl Game {
         for g in &bd.growths {
             p.growths.push(Growth { kind: g.0, at: g.1, tex: g.2, size: 1.2 });
         }
+        p.base_growths = p.growths.len();
         let level = match self.area.kind {
             AreaKind::Rift(i) => crate::world::rift::RULES[i].level + 3,
             _ => 20,
