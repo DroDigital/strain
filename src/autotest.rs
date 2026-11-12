@@ -12,6 +12,8 @@ pub enum Step {
     Shot(&'static str),
     Do(fn(&mut Game)),
     Log(&'static str),
+    /// let a simple combat bot play for n frames
+    Bot(u32),
 }
 
 pub struct AutoTest {
@@ -34,6 +36,67 @@ impl AutoTest {
         use Step::*;
         let steps: Vec<Step> = match name.as_str() {
             "title" => vec![Wait(40), Shot("title")],
+            "duel" => vec![
+                Wait(10),
+                Do(|g| {
+                    std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                    g.new_game();
+                    // a level-appropriate character for the first rift: level 12, rare gear
+                    g.pl.life.level = 12;
+                    let mut r = crate::util::Rng::with_seed(9);
+                    use crate::game::loot::{gen_item, Rarity};
+                    use crate::data::Source;
+                    g.pl.gear.eq[0] = Some(gen_item(&g.t, &mut r, 12, &[Source::Military], Rarity::Rare, Some("trench_cleaver")));
+                    g.pl.gear.eq[1] = Some(gen_item(&g.t, &mut r, 12, &[Source::Military], Rarity::Rare, Some("riot_shield")));
+                    g.pl.gear.eq[2] = Some(gen_item(&g.t, &mut r, 12, &[Source::Military], Rarity::Rare, Some("riot_helmet")));
+                    g.pl.gear.eq[3] = Some(gen_item(&g.t, &mut r, 12, &[Source::Military], Rarity::Rare, Some("flak_vest")));
+                    g.pl.gear.eq[4] = Some(gen_item(&g.t, &mut r, 12, &[Source::Military], Rarity::Rare, Some("combat_trousers")));
+                    for m in ["keratin_knuckles", "carrion_appetite", "thick_hide", "clot_factor", "nerve_lattice", "bone_spurs"] {
+                        g.pl.life.mutations.push(m.into());
+                    }
+                    g.refresh_player();
+                    let pe = g.player;
+                    if let Some(a) = g.w.actor.get_mut(pe) { a.hp = a.max_hp; }
+                    g.pl.heal_charges = g.pl.stats.heal_charges;
+                    let p = crate::world::chunk_center(1, (2, 2));
+                    teleport(g, p + Vec3::new(-24.0, 0.0, -24.0));
+                    let pp = g.ppos();
+                    for k in 0..4 {
+                        let e = g.spawn_archetype(["rusher", "brute", "leaper", "spitter"][k], pp + Vec3::new(k as f32 * 2.0 - 3.0, 0.0, 9.0), 2, 7, None);
+                        if let Some(ai) = g.w.ai.get_mut(e) { ai.target = Some(pe); ai.alert = 30.0; }
+                    }
+                    eprintln!("autotest: duel start hp {:.0} armor {:.0} dmg {:.2}", g.pl.stats.max_hp, g.pl.stats.armor, g.pl.stats.dmg);
+                }),
+                Bot(1800),
+                Shot("duel_street"),
+                Do(|g| {
+                    let alive = g.w.foe.iter().filter(|(id, f)| f.stage > 0 && g.w.actor.get(g.w.ent(*id)).map(|a| a.alive && a.team == crate::game::comp::Team::Infected).unwrap_or(false) && (g.w.body.get(g.w.ent(*id)).unwrap().pos - g.ppos()).length() < 30.0).count();
+                    eprintln!("autotest: street fight over: player alive {} hp {:.0} deaths {} hostiles left nearby {} level {}", g.w.actor.get(g.player).map(|a| a.alive).unwrap_or(false), g.w.actor.get(g.player).map(|a| a.hp).unwrap_or(0.0), g.prof.deaths, alive, g.pl.life.level);
+                    if g.screen == crate::game::Screen::Dead { g.respawn(); }
+                    g.pl.life.level = 12;
+                    g.pl.life.mutations = ["keratin_knuckles", "carrion_appetite", "thick_hide", "clot_factor", "nerve_lattice", "bone_spurs"].iter().map(|s| s.to_string()).collect();
+                    g.refresh_player();
+                    g.bot_stop_on_death = true;
+                    g.screen = crate::game::Screen::None;
+                    g.mutation_choices.clear();
+                    g.pl.life.pending_levels = 0;
+                    let pe = g.player;
+                    if let Some(a) = g.w.actor.get_mut(pe) { a.hp = a.max_hp; }
+                    g.pl.heal_charges = g.pl.stats.heal_charges;
+                    g.enter_rift(0);
+                    let (c, _) = g.area.arena;
+                    g.place_player(c + Vec3::new(0.0, 0.0, -7.0));
+                }),
+                Wait(5),
+                Do(|g| { g.progress_tick(); g.cutscene = None; g.boss_awake = true; }),
+                Bot(5400),
+                Shot("duel_boss"),
+                Do(|g| {
+                    let bf = g.boss.and_then(|b| g.w.actor.get(b)).map(|a| a.frac()).unwrap_or(0.0);
+                    eprintln!("autotest: boss fight: boss hp {:.0}% killed {} player alive {} hp {:.0} heals left {}", bf * 100.0, g.prof.bosses[0], g.w.actor.get(g.player).map(|a| a.alive).unwrap_or(false), g.w.actor.get(g.player).map(|a| a.hp).unwrap_or(0.0), g.pl.heal_charges);
+                }),
+                Log("duel done"),
+            ],
             "spells" => {
                 let mut v = vec![
                     Wait(10),
@@ -362,6 +425,12 @@ impl AutoTest {
         }
         let Some(s) = self.steps.get(self.i) else { return true };
         let mut next = true;
+        for a in [Action::MoveF, Action::MoveB, Action::MoveL, Action::MoveR, Action::Block, Action::Light, Action::Dodge, Action::Heal, Action::LockOn, Action::UiAccept] {
+            if !matches!(s, Step::Bot(_)) {
+                break;
+            }
+            input.inject(a, false);
+        }
         match s {
             Step::Wait(n) => {
                 self.t += 1;
@@ -386,6 +455,11 @@ impl AutoTest {
             }
             Step::Do(f) => f(g),
             Step::Log(m) => eprintln!("autotest: {m} after {} frames", self.frames),
+            Step::Bot(n) => {
+                bot(g, input, self.t);
+                self.t += 1;
+                next = self.t >= *n;
+            }
         }
         if next {
             self.i += 1;
@@ -393,4 +467,86 @@ impl AutoTest {
         }
         false
     }
+}
+
+/// A crude but honest combat bot: lock on, keep range, dodge telegraphed swings, heal when low.
+fn bot(g: &mut Game, input: &mut Input, t: u32) {
+    use crate::game::comp::ActKind;
+    if g.screen == Screen::Dead {
+        if g.dead_t > 2.6 && !g.bot_stop_on_death {
+            input.inject(Action::UiAccept, true);
+        }
+        return;
+    }
+    if g.screen == Screen::LevelUp {
+        input.inject(Action::UiAccept, true);
+        return;
+    }
+    if g.screen != Screen::None {
+        return;
+    }
+    let pe = g.player;
+    let Some(pa) = g.w.actor.get(pe).cloned() else { return };
+    if !pa.alive {
+        return;
+    }
+    let pp = g.ppos();
+    if g.pl.lock.is_none() {
+        if t % 10 == 0 {
+            input.inject(Action::LockOn, true);
+        }
+        // no target: walk toward the nearest infected
+        let near = g.w.foe.iter().filter(|(id, _)| g.w.actor.get(g.w.ent(*id)).map(|a| a.alive && a.team == crate::game::comp::Team::Infected).unwrap_or(false)).map(|(id, _)| g.w.body.get(g.w.ent(id)).unwrap().pos).min_by(|a, b| (*a - pp).length().partial_cmp(&(*b - pp).length()).unwrap());
+        if let Some(np) = near {
+            if (np - pp).length() > 3.0 && (np - pp).length() < 40.0 {
+                let d = np - pp;
+                g.cam.yaw = d.x.atan2(d.z);
+                input.inject(Action::MoveF, true);
+            }
+        }
+        return;
+    }
+    let l = g.pl.lock.unwrap();
+    let (Some(lb), Some(la)) = (g.w.body.get(l).copied(), g.w.actor.get(l).cloned()) else { return };
+    let dist = crate::util::flat(lb.pos - pp).length() - lb.radius;
+    let busy = pa.act.kind != ActKind::Idle;
+    let hp = pa.frac();
+    // the most threatening attacker in reach
+    let mut threat = false;
+    g.hash.query(pp, 7.0, |id, p, r| {
+        let e = g.w.ent(id);
+        if let Some(a) = g.w.actor.get(e) {
+            if a.alive && a.team == crate::game::comp::Team::Infected && a.act.kind == ActKind::Attack {
+                let mv = a.act.mv.unwrap();
+                let ph = a.act.phase();
+                let reach = mv.reach + mv.lunge * 0.6 + r + 0.6;
+                if ph > 0.6 && ph < 1.15 && (p - pp).length() < reach {
+                    threat = true;
+                }
+            }
+        }
+    });
+    if threat && !busy && g.pl.stamina > 20.0 {
+        input.inject(Action::MoveL, true);
+        input.inject(Action::MoveB, true);
+        input.inject(Action::Dodge, true);
+        return;
+    }
+    if hp < 0.4 && !busy && g.pl.heal_charges > 0 && t % 5 == 0 {
+        input.inject(Action::Heal, true);
+        input.inject(Action::MoveB, true);
+        return;
+    }
+    let reach = 1.6;
+    if dist > reach {
+        input.inject(Action::MoveF, true);
+    } else if g.pl.stamina < 25.0 {
+        input.inject(Action::MoveB, true);
+        input.inject(Action::Block, la.act.kind == ActKind::Attack);
+    } else if !busy || pa.act.phase() > 2.4 {
+        if la.act.kind == ActKind::Opened || t % 9 == 0 {
+            input.inject(Action::Light, true);
+        }
+    }
+    let _ = t;
 }
