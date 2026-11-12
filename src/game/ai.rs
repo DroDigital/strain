@@ -880,8 +880,13 @@ impl Game {
                 let m = bd.attacks[i % n];
                 let a = self.w.actor.get_mut(e).unwrap();
                 a.act = Act::attack(m, false, m.dmg > 1.2, 0, rate);
-                // combos: queue a follow-up by shortening the cooldown
-                self.w.ai.get_mut(e).unwrap().cd = if chance(&mut self.rng, 0.5) { 0.1 } else { rf(&mut self.rng, 0.6, 1.2) / rate };
+                // combos of 1-3 swings, then a real opening to punish
+                let ai = self.w.ai.get_mut(e).unwrap();
+                if ai.combo == 0 {
+                    ai.combo = 1 + (self.rng.u32(0..3) as u8).min(cur as u8 + 1);
+                }
+                ai.combo -= 1;
+                ai.cd = if ai.combo > 0 { 0.1 } else { rf(&mut self.rng, 1.4, 2.2) / rate.sqrt() };
                 return;
             }
             _ => {

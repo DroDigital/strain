@@ -219,6 +219,8 @@ pub struct Ai {
     pub phase: usize,
     pub move_i: usize,
     pub summons: u32,
+    /// attacks left in the current boss combo
+    pub combo: u8,
 }
 impl Ai {
     pub fn new(kind: AiKind, home: Vec3, seed: u32) -> Ai {
@@ -240,6 +242,7 @@ impl Ai {
             phase: 0,
             move_i: 0,
             summons: 0,
+            combo: 0,
         }
     }
 }

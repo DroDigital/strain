@@ -67,7 +67,7 @@ impl AutoTest {
                     }
                     eprintln!("autotest: duel start hp {:.0} armor {:.0} dmg {:.2}", g.pl.stats.max_hp, g.pl.stats.armor, g.pl.stats.dmg);
                 }),
-                Bot(1800),
+                Bot(if std::env::var("STRAIN_BOTLOG").is_ok() { 1 } else { 1800 }),
                 Shot("duel_street"),
                 Do(|g| {
                     let alive = g.w.foe.iter().filter(|(id, f)| f.stage > 0 && g.w.actor.get(g.w.ent(*id)).map(|a| a.alive && a.team == crate::game::comp::Team::Infected).unwrap_or(false) && (g.w.body.get(g.w.ent(*id)).unwrap().pos - g.ppos()).length() < 30.0).count();
@@ -89,7 +89,7 @@ impl AutoTest {
                 }),
                 Wait(5),
                 Do(|g| { g.progress_tick(); g.cutscene = None; g.boss_awake = true; }),
-                Bot(5400),
+                Bot(if std::env::var("STRAIN_BOTLOG").is_ok() { 900 } else { 5400 }),
                 Shot("duel_boss"),
                 Do(|g| {
                     let bf = g.boss.and_then(|b| g.w.actor.get(b)).map(|a| a.frac()).unwrap_or(0.0);
@@ -491,6 +491,15 @@ fn bot(g: &mut Game, input: &mut Input, t: u32) {
         return;
     }
     let pp = g.ppos();
+    if std::env::var("STRAIN_BOTLOG").is_ok() && t % 30 == 0 {
+        let lock = g.pl.lock.and_then(|l| g.w.body.get(l).map(|b| ((b.pos - pp).length(), g.w.foe.get(l).map(|f| f.name.clone()))));
+        let boss = g.boss.and_then(|b| g.w.actor.get(b)).map(|a| (a.frac(), a.act.kind, g.w.body.get(g.boss.unwrap()).map(|b| (b.pos - pp).length())));
+        eprintln!("bot t{t} hp {:.0}/{:.0} stam {:.0} act {:?} lock {:?} boss {:?} awake {} screen {:?} cut {}", pa.hp, pa.max_hp, g.pl.stamina, pa.act.kind, lock, boss, g.boss_awake, g.screen, g.cutscene.is_some());
+    }
+    if pa.frac() < 0.4 && pa.act.kind == ActKind::Idle && g.pl.heal_charges > 0 && t % 5 == 0 {
+        input.inject(Action::Heal, true);
+        return;
+    }
     if g.pl.lock.is_none() {
         if t % 10 == 0 {
             input.inject(Action::LockOn, true);

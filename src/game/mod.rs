@@ -355,6 +355,7 @@ impl Game {
             d.x.atan2(d.z)
         });
         let mut best: Option<(Entity, f32)> = None;
+        let mut nearest: Option<(Entity, f32)> = None;
         self.hash.query(pp, 22.0, |id, p, _| {
             let e = self.w.ent(id);
             if Some(e) == cur || e == self.player {
@@ -369,6 +370,9 @@ impl Game {
             let dist = d.length();
             if dist < 0.1 || !self.area.line_of_sight(pp + Vec3::Y * 1.5, p + Vec3::Y) {
                 return;
+            }
+            if flick.is_none() && dist < 12.0 && nearest.map(|n| dist < n.1).unwrap_or(true) {
+                nearest = Some((e, dist));
             }
             let score = match (flick, cur_ang) {
                 (Some(f), Some(ca)) => {
@@ -391,7 +395,8 @@ impl Game {
                 best = Some((e, score));
             }
         });
-        best.map(|b| b.0)
+        // nothing ahead of the camera: take the closest threat around you
+        best.or(nearest).map(|b| b.0)
     }
 
     // ---- lifecycle --------------------------------------------------------------------------
@@ -690,6 +695,10 @@ impl Game {
                 self.step(DT);
                 self.acc -= DT;
                 steps += 1;
+                // edge-triggered input belongs to the first step of the frame only
+                self.input_snapshot.pressed.clear();
+                self.input_snapshot.released.clear();
+                self.input_snapshot.look_flick = 0.0;
             }
             if steps == 5 {
                 self.acc = 0.0;
