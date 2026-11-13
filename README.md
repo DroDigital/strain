@@ -228,7 +228,8 @@ street pack and the first boss),
 (a vehicle and street furniture close up),
 `spells` (all 18 spells), `stress` (every mutation and unique, every archetype at every stage),
 `progress` (Husk reclaim and rising, vendor, stash, all bosses, ending, save and continue) and
-`title` / `opening`. `STRAIN_PROFILE=1` prints CPU timings.
+`title` / `opening`. `STRAIN_PROFILE=1` prints CPU timings; `STRAIN_FAST=1` drops to the cheapest
+graphics settings for long runs on software rendering.
 
 ## Releases
 

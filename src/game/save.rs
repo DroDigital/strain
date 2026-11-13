@@ -67,6 +67,14 @@ pub fn load_settings() -> Settings {
         s.gfx.internal_height = 0;
         s.version = SETTINGS_VERSION;
     }
+    if std::env::var("STRAIN_FAST").is_ok() {
+        // long scripted runs on software rendering (CI, build machines): the cheapest picture
+        s.gfx.internal_height = 360;
+        s.gfx.shadow_quality = 0;
+        s.gfx.fog_quality = 0;
+        s.gfx.particle_density = 0;
+        s.gfx.vsync = false;
+    }
     s
 }
 pub fn save_settings(s: &Settings) {
