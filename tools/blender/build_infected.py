@@ -630,8 +630,56 @@ def seed_boss(b):
     ribs_out(b, 4, 0.2, 0.18)
 
 
+def skitter(b):
+    """Leaper: the head wrenched round to face backwards on a broken neck, forearms drawn out long
+    and ending in bone hooks, the spine standing out of a starved back."""
+    nk, h = J(b, "Neck"), J(b, "Head")
+    axis = Vector((0, 1, 0))
+    for q in b.prims:
+        wh = b.bone_w(q, ["Head"])
+        wn = b.bone_w(q, ["Neck"])
+        # the head turns the whole way, the neck twists halfway with it
+        ang = np.pi * np.clip(wh + wn * 0.5, 0, 1)
+        c = np.array([nk.x, 0, nk.z])
+        d = q["pos"] - c
+        ca, sa = np.cos(ang), np.sin(ang)
+        x = d[:, 0] * ca + d[:, 2] * sa
+        z = -d[:, 0] * sa + d[:, 2] * ca
+        moved = np.clip(wh + wn * 0.5, 0, 1) > 1e-3
+        q["pos"][moved, 0] = (x + c[0])[moved]
+        q["pos"][moved, 2] = (z + c[2])[moved]
+        q["nrm"][moved, 0], q["nrm"][moved, 2] = (q["nrm"][moved, 0] * ca[moved] + q["nrm"][moved, 2] * sa[moved],
+                                                  -q["nrm"][moved, 0] * sa[moved] + q["nrm"][moved, 2] * ca[moved])
+        # ...and lolls over onto one shoulder, the neck plainly broken
+        roll = 0.75 * np.clip(wh + wn * 0.3, 0, 1)
+        cy = np.array([nk.x, nk.y, 0])
+        d2 = q["pos"] - cy
+        cr, sr = np.cos(roll), np.sin(roll)
+        nx = d2[:, 0] * cr - d2[:, 1] * sr
+        ny = d2[:, 0] * sr + d2[:, 1] * cr
+        q["pos"][:, 0] = np.where(roll > 1e-3, nx + cy[0], q["pos"][:, 0])
+        q["pos"][:, 1] = np.where(roll > 1e-3, ny + cy[1], q["pos"][:, 1])
+    b._bvh = None
+    _ = (axis, h)
+    b.inflate(["Torso", "Abdomen", "UpperArm.L", "UpperArm.R", "UpperLeg.L", "UpperLeg.R", "LowerLeg.L", "LowerLeg.R"], -0.01, lumpy=0.5)
+    for side in ("L", "R"):
+        e, hd = J(b, f"LowerArm.{side}"), J(b, f"Middle1.{side}")
+        b.stretch(f"Middle1.{side}", (hd - e).normalized(), 0.0, 0.0)
+        b.stretch(f"LowerArm.{side}", (hd - e).normalized(), 1.1, (hd - e).length * 0.3)
+    b.paint(veins=0.4, bruise=0.5, blood=[("Neck", 0.12)], gore=0.3, seed=21)
+    b.eyes(color=(0.9, 0.85, 0.6))
+    # the torn throat where the neck turned
+    s, n = b.surf(nk + Vector((0, 0.01, 0.05)), FWD)
+    b.blob(s, 0.045, lobes=3, squash=(1.3, 0.5, 0.6), tex="Flesh", seed=22, color=DARK_BLOOD, rough=0.08, anchor=nk)
+    long_claws(b, "L", 0.3, 0.009)
+    long_claws(b, "R", 0.3, 0.009)
+    spine_ridge(b, 13, 0.07, 0.011)
+    ribs_out(b, 3, 0.1, 0.12, at=J(b, "Torso") + Vector((0, -0.1, -0.02)))
+
+
 # name: (body, base seed, rags, skin source, skin kind, recipe)
 RECIPES = {
+    "Strain_Skitter": ("Male", 14, "shorts", "skin_male_dark", "rot", skitter),
     "Strain_Carrier": ("Male", 1, "rags", "skin_male_light", "pale", carrier),
     "Strain_Shambler": ("Female", 2, "rags", "skin_female_light", "rot", shambler),
     "Strain_Bulk": ("Male", 3, "shorts", "skin_male_light", "pale", bulk),

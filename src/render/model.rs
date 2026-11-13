@@ -602,7 +602,7 @@ mod infected_tests {
         let names = [
             "Human_Player", "Human_Soldier_M", "Human_Soldier_F", "Human_Civilian_M1", "Human_Civilian_M2", "Human_Civilian_F1", "Human_Civilian_F2",
             "Strain_Carrier", "Strain_Shambler", "Strain_Bulk", "Strain_Retch", "Strain_Larva", "Strain_Bulwark", "Strain_Lurker", "Strain_Matron",
-            "Strain_Digestor", "Strain_Geometer", "Strain_MotherCinder", "Strain_Cantor", "Strain_Seed",
+            "Strain_Digestor", "Strain_Geometer", "Strain_MotherCinder", "Strain_Cantor", "Strain_Seed", "Strain_Skitter",
         ];
         for n in names {
             let i = *lib.index.get(n).unwrap_or_else(|| panic!("missing model {n}"));
@@ -647,9 +647,6 @@ mod infected_tests {
                 assert!(lo.abs() < 0.12, "{n} {clip}: feet {lo} m off the floor");
             }
         }
-        // the kit dog stays on its own rig and clips
-        let sk = &lib.models[lib.index["Strain_Skitter"]];
-        assert!(sk.skinned() && !sk.clips.is_empty());
     }
 }
 

@@ -21,7 +21,6 @@ Regenerate with `python3 tools/fetch_assets.py`.
 | audio | audio/* (sword) | 20 Sword Sound Effects (StarNinjas) | https://opengameart.org/content/20-sword-sound-effects-attacks-and-clashes | CC0 1.0 |
 | audio | audio/* (water) | 40 CC0 water/splash/slime SFX (rubberduck) | https://opengameart.org/content/40-cc0-water-splash-slime-sfx | CC0 1.0 |
 | audio | audio/* (zombie) | Zombies Sound Pack (artisticdude) | https://opengameart.org/content/zombies-sound-pack | CC0 1.0 |
-| infected | models/Strain_Skitter.glb | Built by `tools/blender/build_enemies.py` on the Quaternius Zombie Apocalypse Kit dog | https://quaternius.com/packs/zombieapocalypsekit.html | CC0 1.0 |
 | texture | textures/asphalt.png, textures/asphalt_n.png | ambientCG Asphalt031 | https://ambientcg.com/view?id=Asphalt031 | CC0 1.0 |
 | texture | textures/paving.png, textures/paving_n.png | ambientCG PavingStones128 | https://ambientcg.com/view?id=PavingStones128 | CC0 1.0 |
 | texture | textures/brick.png, textures/brick_n.png | ambientCG Bricks097 | https://ambientcg.com/view?id=Bricks097 | CC0 1.0 |

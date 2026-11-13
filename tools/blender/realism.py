@@ -42,8 +42,8 @@ HUMANS = ["Characters_Matt_SingleWeapon"]
 INFECTED = ["Strain_Carrier", "Strain_Shambler", "Strain_Bulk", "Strain_Skitter", "Strain_Retch", "Strain_Larva", "Strain_Bulwark", "Strain_Lurker",
             "Strain_Matron", "Strain_Digestor", "Strain_Geometer", "Strain_MotherCinder", "Strain_Cantor", "Strain_Seed"]
 # the humans and infected are now built on realistic bodies (build_humans.py, build_infected.py);
-# only the kit dogs still come through this pass
-TARGETS = ["Characters_GermanShepherd", "Strain_Skitter"]
+# nothing in the game still comes through this pass, which remains for kit models
+TARGETS = []
 
 # head, hands, feet scale about their joints; arms and legs slim toward their bone axes
 PROPORTIONS = {"human": (0.72, 0.72, 0.86), "infected": (0.82, 0.86, 0.9), "none": (1.0, 1.0, 1.0)}

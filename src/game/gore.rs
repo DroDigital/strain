@@ -75,7 +75,8 @@ pub fn profile(model: &str) -> GoreProfile {
         "Strain_Carrier" => p(Fx::Blood, Fx::Bone, HALVES, true, 3.5, Special::None, 1.1, DARK),
         "Strain_Shambler" => p(Fx::Ichor, Fx::Bone, HUMAN, true, 3.0, Special::Spores, 1.1, ICHOR),
         "Strain_Bulk" => p(Fx::Ichor, Fx::Bone, BRUTE, true, 5.0, Special::Pus, 0.6, ICHOR),
-        "Strain_Skitter" => p(Fx::Ichor, Fx::Bone, DOG, false, 2.5, Special::None, 1.2, ICHOR),
+        // the leaper's neck is already broken: its head comes away easily
+        "Strain_Skitter" => p(Fx::Blood, Fx::Bone, HUMAN, true, 2.5, Special::None, 1.3, DARK),
         "Strain_Retch" => p(Fx::Acid, Fx::Bone, ARMS, true, 4.0, Special::Acid, 1.0, [0.08, 0.14, 0.02]),
         // the crawler is a torso dragging itself: arms, head, or the whole upper body
         "Strain_Larva" => p(Fx::Blood, Fx::Bone, CRAWLER, true, 3.0, Special::None, 1.4, DARK),

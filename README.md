@@ -24,9 +24,9 @@ combine CC0 (public domain) assets with procedural generation:
   throat, a legless torso dragging its guts, a ribcage fused into armour, blade fingers and
   grown-over eyes, a womb-sac of larvae, a belly opened into a stomach-maw, crystals forced
   through the skull, a body charred and still burning, mouths up the arms and chest, a flower
-  for a head. Their skins are generated from the real ones: pallid and veined with sores,
-  flayed to the muscle, charred with glowing cracks, rotting, drained white. Affixes and
-  mutations still add procedural growths on top.
+  for a head, a leaper whose head hangs backwards off a broken neck. Their skins are generated
+  from the real ones: pallid and veined with sores, flayed to the muscle, charred with glowing
+  cracks, rotting, drained white. Affixes and mutations still add procedural growths on top.
 - **Weapons, vehicles and street props**: Quaternius *Zombie Apocalypse Kit* (glTF).
 - **Surfaces**: ambientCG photo textures with their normal, roughness and occlusion maps, combined
   with procedural windows, signs, veins and glow.
@@ -157,8 +157,7 @@ libraries `models/Clips_Male.glb` / `Clips_Female.glb`, and per-character textur
 `assets/characters/` (1024 px, with a material map: normal, roughness, subsurface). Materials
 named `C:<name>` select one of those; `T:<Tex>` a tiling photo layer. `build_infected.py` reuses
 the enemy builder's parts on the realistic bodies and writes `models/Strain_*.glb` plus the
-diseased skins. The kit dog (`Strain_Skitter`) still comes from `build_enemies.py` and
-`tools/blender/realism.py`.
+diseased skins.
 
 ## Look
 

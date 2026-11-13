@@ -164,7 +164,7 @@ impl Game {
                 AiKind::Civilian => (pick(&humans), SkinKind::Human, 1.0, false, false, [1.0; 3]),
                 AiKind::Ally => ("Strain_Larva", SkinKind::Zombie, 0.8, true, false, [0.6, 1.0, 0.6]),
                 AiKind::Crawler => ("Strain_Larva", SkinKind::Zombie, 0.95, true, false, [1.0; 3]),
-                AiKind::Leaper if arch == "leaper" => ("Strain_Skitter", SkinKind::Dog, 0.7, false, false, [1.0; 3]),
+                AiKind::Leaper if arch == "leaper" => ("Strain_Skitter", SkinKind::Zombie, 0.98, false, false, [1.0; 3]),
                 AiKind::Brute => ("Strain_Bulk", SkinKind::Zombie, 1.18, false, false, [1.0; 3]),
                 AiKind::Summoner => ("Strain_Matron", SkinKind::Zombie, 1.05, false, false, [1.0; 3]),
                 AiKind::Spitter => ("Strain_Retch", SkinKind::Zombie, 1.0, false, false, [1.0; 3]),

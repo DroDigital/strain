@@ -132,9 +132,9 @@ QZ_GLTF_FOLDERS = {
 MODELS = [
     # characters (skinned, animated)
     # the humans and infected are built on Universal Base Characters (tools/blender/build_humans.py,
-    # build_infected.py); from the kit we keep a reference human, the dog rig and the zombie whose
-    # clips are retargeted onto the realistic skeletons
-    "Characters_Matt_SingleWeapon", "Characters_GermanShepherd", "Zombie_Basic",
+    # build_infected.py); from the kit we keep a reference human and the zombie whose clips are
+    # retargeted onto the realistic skeletons
+    "Characters_Matt_SingleWeapon", "Zombie_Basic",
     # weapons
     "Axe", "Knife", "Rifle", "Spear", "WoodenBat_Barbed", "WoodenBat_Saw", "Pistol",
     # street props

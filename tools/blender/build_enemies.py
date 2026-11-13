@@ -625,6 +625,21 @@ def part_arrays(b, part, ao):
     return pos, nrm, uv, col, j, w, tri
 
 
+def seam_normals(pos, tri, old):
+    """Smooth vertex normals of a deformed mesh, welded by position."""
+    key = np.round(pos * 1e5).astype(np.int64)
+    _, inv = np.unique(key, axis=0, return_inverse=True)
+    inv = inv.ravel()
+    fn = np.cross(pos[tri[:, 1]] - pos[tri[:, 0]], pos[tri[:, 2]] - pos[tri[:, 0]])
+    acc = np.zeros((inv.max() + 1, 3))
+    for k in range(3):
+        np.add.at(acc, inv[tri[:, k]], fn)
+    n = acc[inv]
+    ln = np.linalg.norm(n, axis=1, keepdims=True)
+    # vertices no triangle uses keep their old normal
+    return np.where(ln > 1e-12, n / np.maximum(ln, 1e-12), old)
+
+
 def write_model(b, out_path):
     body = make_body_object(b)
     try:
@@ -644,6 +659,9 @@ def write_model(b, out_path):
         col[:, :3] *= (0.55 + 0.45 * np.clip(ao, 0, 1) ** 1.5)[:, None]
         a = q["prim"]["attributes"]
         a["POSITION"] = g.add(q["pos"].astype(np.float32), "pos", 5126, target=34962, minmax=True)
+        # the body was reshaped (inflated, torn, twisted): its normals follow the new surface,
+        # averaged across UV-seam duplicates so no creases appear
+        a["NORMAL"] = g.add(seam_normals(q["pos"], q["idx"].reshape(-1, 3), q["nrm"]).astype(np.float32), "nrm", 5126, target=34962)
         a["COLOR_0"] = g.add(np.round(np.clip(col, 0, 1) * 255), "color", 5121, target=34962)
         tri = q["idx"].reshape(-1, 3)
         if "drop" in q:
