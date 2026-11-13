@@ -27,7 +27,10 @@ combine CC0 (public domain) assets with procedural generation:
   for a head, a leaper whose head hangs backwards off a broken neck. Their skins are generated
   from the real ones: pallid and veined with sores, flayed to the muscle, charred with glowing
   cracks, rotting, drained white. Affixes and mutations still add procedural growths on top.
-- **Weapons, vehicles and street props**: Quaternius *Zombie Apocalypse Kit* (glTF).
+- **Weapons, vehicles and street props**: Quaternius *Zombie Apocalypse Kit* (glTF), re-surfaced by
+  `tools/blender/props.py`: each flat colour swatch becomes a photo material chosen by colour and
+  context (painted metal for car bodies and containers, metal, rust, wood, concrete, upholstery,
+  rubber, glass, plastic) with grime toward the ground.
 - **Surfaces**: ambientCG photo textures with their normal, roughness and occlusion maps, combined
   with procedural windows, signs, veins and glow.
 - **Sound effects and ambience**: recorded CC0 packs from OpenGameArt, several variants per sound.
@@ -221,7 +224,8 @@ changes. `cargo test` validates the tables and the content minimums.
 close up), `bugs` (regression checks for fixed bugs),
 `roam` (walks every district checking for stuck or embedded states), `duel` (a combat bot fights a
 street pack and the first boss),
-`gore` (ragdolls and dismemberment on every body type), `smash` (props shattering),
+`gore` (ragdolls and dismemberment on every body type), `smash` (props shattering), `props`
+(a vehicle and street furniture close up),
 `spells` (all 18 spells), `stress` (every mutation and unique, every archetype at every stage),
 `progress` (Husk reclaim and rising, vendor, stash, all bosses, ending, save and continue) and
 `title` / `opening`. `STRAIN_PROFILE=1` prints CPU timings.
