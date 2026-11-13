@@ -83,6 +83,8 @@ pub enum Tex {
     Leather,
     Hair,
     Denim,
+    /// painted metal (car bodies, containers, hydrants): dielectric paint over a pressed sheet
+    Paint,
     Count,
 }
 
@@ -237,6 +239,7 @@ fn surface(layer: Tex) -> (f32, f32, f32, f32) {
         Tex::Leather => (-1.0, 1.3, 0.0, 0.6),
         Tex::Hair => (0.42, 1.0, 0.0, 1.4),
         Tex::Denim => (-1.0, 1.1, 0.0, 0.7),
+        Tex::Paint => (0.32, 1.0, 0.0, 0.25),
         Tex::Count => (0.6, 1.0, 0.0, 0.0),
     }
 }
@@ -272,6 +275,7 @@ pub fn generate(layer: Tex) -> (Vec<u8>, Vec<u8>) {
         Tex::Leather => Some(photo("leather")),
         Tex::Denim => Some(photo("fabric_coarse")),
         Tex::Hair => Some(photo("fabric")),
+        Tex::Paint => Some(photo("metal")),
         _ => None,
     };
     // detail layers are normalised to a bright neutral grey so vertex colours set the hue
@@ -406,6 +410,13 @@ pub fn generate(layer: Tex) -> (Vec<u8>, Vec<u8>) {
                 Tex::Denim => {
                     let k = detail(&base, x, y) * (0.92 + 0.12 * tn(u, v, 24.0, s));
                     [k, k, k]
+                }
+                Tex::Paint => {
+                    // neutral paint: faint orange peel, chips showing bare metal, grime in streaks
+                    let chips = (tfbm(u, v, 9.0, s) - 0.72).max(0.0) * 6.0;
+                    let streak = tn(u * 0.25, v, 8.0, s + 3);
+                    let k = 0.8 * (0.94 + 0.06 * tn(u, v, 48.0, s + 1)) * (1.0 - 0.12 * streak);
+                    mix([k, k, k], mul(grey(b), 0.9), chips.min(1.0))
                 }
                 Tex::Hair => {
                     // fine strands running down the texture, clumped by low-frequency noise
