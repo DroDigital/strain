@@ -173,6 +173,49 @@ impl AutoTest {
                 Shot("boss_look"),
                 Log("look done"),
             ],
+            "props" => vec![
+                // the nearest vehicle and its street furniture, close up from two sides
+                Wait(10),
+                Do(|g| {
+                    std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                    g.new_game();
+                    g.tod = 0.45;
+                    let p = crate::world::chunk_center(1, (2, 2)) + Vec3::new(-24.5, 0.0, -10.0);
+                    teleport(g, p);
+                }),
+                Wait(20),
+                Do(|g| {
+                    let pp = g.ppos();
+                    let mut best: Option<(f32, Vec3)> = None;
+                    for c in g.area.chunks.values() {
+                        for (name, m, _) in &c.props {
+                            if name.starts_with("Vehicle_") {
+                                let q = m.w_axis.truncate();
+                                let d = (q - pp).length();
+                                if best.map(|b| d < b.0).unwrap_or(true) {
+                                    best = Some((d, q));
+                                }
+                            }
+                        }
+                    }
+                    if let Some((_, q)) = best {
+                        g.place_player(q + Vec3::new(2.6, 0.0, -3.4));
+                        g.cam.yaw = -0.6;
+                        g.cam.dist = 3.0;
+                        g.cam.pitch = 0.18;
+                        g.cam.snap = true;
+                    }
+                }),
+                Wait(30),
+                Shot("props_a"),
+                Do(|g| {
+                    g.cam.yaw += 1.6;
+                    g.cam.snap = true;
+                }),
+                Wait(20),
+                Shot("props_b"),
+                Log("props done"),
+            ],
             "smash" => vec![
                 // destruction: the nearest breakable street props shatter on camera
                 Wait(10),
