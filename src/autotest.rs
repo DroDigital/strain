@@ -480,12 +480,15 @@ impl AutoTest {
                 Wait(20),
                 Do(|g| {
                     let subjects = GORE.lock().unwrap().clone();
+                    // every killing blow here takes something off
+                    g.gore_force = true;
                     for e in subjects {
                         g.deal(e, Some(g.player), 9999.0, 0.0, Vec3::new(-0.2, 0.0, 1.0).normalize(), crate::game::combat::DmgKind::Heavy, 0.0);
                     }
-                    let gibs = g.debris.iter().filter(|d| d.key == crate::game::debris::GIB_KEY).count();
-                    let severed = g.w.rig.iter().filter(|(_, r)| r.skin.as_ref().map(|s| !s.hide.is_empty()).unwrap_or(false)).count();
-                    eprintln!("autotest: gore: gibs {gibs}, bodies with a severed part {severed}, bleeding stumps {}", g.bleeders.len());
+                    g.gore_force = false;
+                    let meat = g.debris.iter().filter(|d| d.key == crate::game::debris::GIB_KEY).count();
+                    let severed = g.w.rig.iter().filter(|(_, r)| r.skin.as_ref().map(|s| !s.cuts.is_empty()).unwrap_or(false)).count();
+                    eprintln!("autotest: gore: severed parts flying {}, bodies with a severed part {severed}, bleeding stumps {}, meat chunks {meat}", g.gibs.len(), g.bleeds.len());
                 }),
                 Wait(6),
                 Shot("gore_kill"),
