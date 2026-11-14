@@ -31,13 +31,30 @@ pub struct GfxSettings {
     pub particle_density: u8,
     pub vsync: bool,
     pub window_mode: WindowMode,
+    /// retro display filter: 0 none, 1 Trinitron (CRT), 2 Camcorder (VHS), 3 32-Bit (PS1)
+    #[serde(default)]
+    pub filter: u8,
 }
 impl Default for GfxSettings {
     fn default() -> Self {
-        GfxSettings { internal_height: 0, shadow_quality: 2, fog_quality: 1, particle_density: 1, vsync: true, window_mode: WindowMode::Windowed }
+        GfxSettings { internal_height: 0, shadow_quality: 2, fog_quality: 1, particle_density: 1, vsync: true, window_mode: WindowMode::Windowed, filter: 0 }
     }
 }
+pub const FILTER_NAMES: [&str; 4] = ["NONE", "TRINITRON", "CAMCORDER", "32-BIT"];
 impl GfxSettings {
+    /// Each retro filter renders the scene at its own native resolution (cheaper), never above
+    /// the chosen internal resolution.
+    /// Render height for a window `window_h` pixels tall: the chosen height (0 = native), capped
+    /// by the retro filter's own native resolution.
+    pub fn scene_height_for(&self, window_h: u32) -> u32 {
+        let want = if self.internal_height == 0 { window_h } else { self.internal_height };
+        let cap = [u32::MAX, 360, 288, 240][self.filter.min(3) as usize];
+        want.min(cap).max(1)
+    }
+    /// The capped height when one applies (for menus and logs); 0 = native.
+    pub fn scene_height(&self) -> u32 {
+        if self.filter == 0 { self.internal_height } else { self.scene_height_for(self.internal_height.max(1080)) }
+    }
     pub fn particle_scale(&self) -> f32 {
         [0.4, 1.0, 1.6][self.particle_density.min(2) as usize]
     }
@@ -71,6 +88,8 @@ struct Globals {
     wind: [f32; 4],
     prev_vp: [f32; 16],
     lens: [f32; 4],
+    /// retro filter, window width, window height, unused
+    post: [f32; 4],
 }
 
 #[repr(C)]
@@ -897,8 +916,9 @@ impl Renderer {
         shadow: &wgpu::TextureView,
         ss: &wgpu::Sampler,
     ) -> Targets {
-        let native = s.internal_height == 0 || s.internal_height >= config.height;
-        let h = if native { config.height.max(1) } else { s.internal_height.clamp(360, 2160) };
+        let want = s.scene_height_for(config.height.max(1));
+        let native = want >= config.height;
+        let h = if native { config.height.max(1) } else { want.clamp(200, 2160) };
         let aspect = (config.width as f32 / config.height.max(1) as f32).clamp(0.5, 3.0);
         let w = if native { config.width.max(1) } else { ((h as f32 * aspect) as u32 + 1) & !1 };
         let (_, scene_view) = make_tex(device, w, h, HDR, "scene");
@@ -1077,6 +1097,7 @@ impl Renderer {
         g.screen = [t.w as f32, t.h as f32, 0.0, e.exposure];
         g.grade = e.grade.extend(e.saturation).into();
         g.fx = [e.grain, 0.0, e.vignette, e.strain];
+        g.post = [self.settings.filter as f32, self.config.width as f32, self.config.height as f32, 0.0];
         let nl = f.lights.len().min(32);
         let nd = f.distorts.len().min(8);
         g.counts = [nl as f32, nd as f32, e.fade, e.flash];

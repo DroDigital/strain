@@ -178,7 +178,8 @@ impl Game {
     #[allow(clippy::too_many_arguments)]
     pub fn gore_on_hit(&mut self, t: crate::ecs::Entity, src: Option<crate::ecs::Entity>, amount: f32, kind: DmgKind, dir: Vec3, lethal: bool) {
         let ctx = self.cut_ctx.take();
-        if t == self.player || matches!(kind, DmgKind::Rot | DmgKind::True) {
+        // the player and co-op guests are downed and revived, never taken apart
+        if t == self.player || self.is_guest(t) || matches!(kind, DmgKind::Rot | DmgKind::True) {
             return;
         }
         let Some(a) = self.w.actor.get(t) else { return };

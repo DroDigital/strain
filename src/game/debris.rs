@@ -3,16 +3,20 @@
 //! barrels, barriers, couches, hydrants...) shatter into pieces of their own geometry when a blow
 //! or blast is strong enough, and the pieces join the debris.
 use super::Game;
-use crate::physics::Statics;
-use crate::render::mesh::Instance;
 use crate::particles::Fx;
 use crate::util::rf;
+use crate::physics::Statics;
+use crate::render::mesh::Instance;
 use glam::{Mat4, Quat, Vec3};
 
 /// Kit models that become dynamic debris instead of static props.
 pub const LOOSE: [&str; 7] = ["TrafficCone_1", "TrafficCone_2", "TrashBag_1", "TrashBag_2", "Pallet_Broken", "CinderBlock", "Wheels_Stack"];
 
+/// Chunk key that marks gibs (they belong to no street chunk).
+pub const GIB_KEY: (i32, i32) = (i32::MIN, i32::MIN);
+
 #[derive(Clone, Debug)]
+
 pub struct Debris {
     pub id: u32,
     pub key: (i32, i32),
@@ -25,6 +29,8 @@ pub struct Debris {
     /// rough mass: light things fly further
     pub mass: f32,
     pub asleep: bool,
+    /// seconds left for gibs; infinite for street clutter
+    pub life: f32,
 }
 
 impl Game {
@@ -41,7 +47,7 @@ impl Game {
                 "Pallet_Broken" => 2.0,
                 _ => 0.6,
             };
-            self.debris.push(Debris { id, key, pos: t, vel: Vec3::ZERO, rot: r, spin: Vec3::ZERO, scale: s.x, tint, mass, asleep: true });
+            self.debris.push(Debris { id, key, pos: t, vel: Vec3::ZERO, rot: r, spin: Vec3::ZERO, scale: s.x, tint, mass, asleep: true, life: f32::INFINITY });
         }
     }
 
@@ -86,7 +92,7 @@ impl Game {
                 let r = &mut self.rng;
                 let vel = out * rf(r, 1.0, 3.0) * force.sqrt() + dir * force * rf(r, 0.4, 0.9) + Vec3::Y * rf(r, 1.0, 3.0);
                 let spin = crate::util::rand_dir(r) * rf(r, 3.0, 12.0);
-                self.debris.push(Debris { id, key, pos, vel, rot, spin, scale: s.x, tint, mass: 0.5, asleep: false });
+                self.debris.push(Debris { id, key, pos, vel, rot, spin, scale: s.x, tint, mass: 0.5, asleep: false, life: 45.0 });
             }
             let soft = matches!(name, "Couch" | "Pallet" | "Chest");
             self.parts.burst(Fx::Dust, t + Vec3::Y * 0.4, dir, 12, 1.4);
@@ -121,6 +127,36 @@ impl Game {
         }
     }
 
+    /// Throw a gib (a severed head or arm, or a lump of meat) from a kill.
+    pub fn spawn_gib(&mut self, name: &str, pos: Vec3, vel: Vec3, scale: f32, tint: [f32; 4]) {
+        let Some(&id) = self.lib.static_id.get(name) else { return };
+        let r = &mut self.rng;
+        let spin = Vec3::new(rf(r, -9.0, 9.0), rf(r, -6.0, 6.0), rf(r, -9.0, 9.0));
+        self.debris.push(Debris { id, key: GIB_KEY, pos, vel, rot: Quat::from_rotation_y(rf(r, 0.0, 6.28)), spin, scale, tint, mass: 1.0, asleep: false, life: 40.0 });
+        // keep the street from filling up: drop the oldest gibs first
+        let gibs = self.debris.iter().filter(|d| d.key == GIB_KEY).count();
+        if gibs > 48 {
+            if let Some(i) = self.debris.iter().position(|d| d.key == GIB_KEY) {
+                self.debris.remove(i);
+            }
+        }
+    }
+
+    /// Stumps and wounds that keep pumping blood for a moment after a kill.
+    pub fn bleed_tick(&mut self, dt: f32) {
+        for b in &mut self.bleeders {
+            b.2 -= dt;
+        }
+        let list = self.bleeders.clone();
+        for (p, d, t) in list {
+            if t > 0.0 {
+                let pulse = 0.5 + 0.5 * (t * 14.0).sin();
+                self.parts.burst(Fx::Spurt, p, d, (pulse * 3.0) as u32 + 1, 0.6 + t.min(1.0) * 0.8);
+            }
+        }
+        self.bleeders.retain(|b| b.2 > 0.0);
+    }
+
     pub fn debris_tick(&mut self, dt: f32) {
         // burst hydrants keep spraying for a while
         let mut jets = std::mem::take(&mut self.hydrants);
@@ -131,9 +167,14 @@ impl Game {
         }
         jets.retain(|j| j.1 > 0.0);
         self.hydrants = jets;
+        self.bleed_tick(dt);
         if self.debris.is_empty() {
             return;
         }
+        for d in &mut self.debris {
+            d.life -= dt;
+        }
+        self.debris.retain(|d| d.life > 0.0);
         self.debris.truncate(400);
         // anyone moving through clutter kicks it along
         let mut kicks: Vec<(usize, Vec3)> = Vec::new();

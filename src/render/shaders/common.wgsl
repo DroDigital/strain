@@ -24,6 +24,7 @@ struct Globals {
     wind: vec4<f32>,                 // xz drift of the fog noise (m/s), y rise, w = ground mist
     prev_vp: mat4x4<f32>,            // last frame's view-projection, for motion blur
     lens: vec4<f32>,                 // focus distance, depth-of-field strength, motion blur, unused
+    post: vec4<f32>,                 // retro filter, window w, window h, unused
 };
 @group(0) @binding(0) var<uniform> G: Globals;
 

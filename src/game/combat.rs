@@ -477,6 +477,14 @@ impl Game {
         let is_player = t == self.player;
         let mut amount = amount;
         let mut poise = poise;
+        if self.is_guest(t) {
+            // co-op guests dodge through blows like the host, and block with their guard
+            let act = &ta.act;
+            if act.kind == ActKind::Dodge && act.t > 0.03 && act.t < act.dur * 0.72 && kind != DmgKind::True && kind != DmgKind::Rot {
+                return 0.0;
+            }
+            amount = self.guest_block(t, amount);
+        }
         let src_body: Option<Body> = src.and_then(|s| self.w.body.get(s).copied());
         if is_player {
             let act = ta.act.clone();
@@ -674,13 +682,18 @@ impl Game {
                 }
             }
             self.audio.play_at(if heavy { Sfx::HitHeavy } else { Sfx::HitFlesh }, c, 0.7, rf(&mut self.rng, 0.85, 1.15));
+            // sparks only where steel meets armour, shells or plates
+            let armoured = self.w.foe.get(t).map(|f| f.plates > 0.0).unwrap_or(false) || self.w.ai.get(t).map(|a| matches!(a.kind, AiKind::Shielded | AiKind::Soldier)).unwrap_or(false);
+            if armoured && matches!(kind, DmgKind::Melee | DmgKind::Heavy) {
+                self.parts.burst(Fx::Sparks, c, dir, if heavy { 10 } else { 4 }, 0.7);
+            }
         }
         if !is_player {
             self.gore_on_hit(t, src, amount, kind, dir, lethal);
         } else {
             self.cut_ctx = None;
         }
-        if amount >= 1.0 && (src == Some(self.player) || is_player) && !matches!(kind, DmgKind::Rot | DmgKind::Fire) {
+        if self.settings.damage_numbers && amount >= 1.0 && (src == Some(self.player) || is_player) && !matches!(kind, DmgKind::Rot | DmgKind::Fire) {
             self.float_text(c + Vec3::Y * 0.4, &format!("{:.0}", amount), if is_player { [1.0, 0.3, 0.3] } else { [1.0, 1.0, 1.0] });
         }
         if is_player {
@@ -721,7 +734,10 @@ impl Game {
                     return amount;
                 }
                 self.player_died(src);
+            } else if self.guest_downed(t) {
+                // a guest goes down instead of dying
             } else {
+                // severing happened in `gore_on_hit` above, per creature
                 self.kill(t, src);
             }
         }
@@ -1386,10 +1402,20 @@ impl Game {
         self.parts.burst(if team == Team::Infected { Fx::Ichor } else { Fx::Blood }, b.center(), Vec3::Y, 24, 1.6);
         let sz = self.w.rig.get(e).map(|r| r.plan.scale).unwrap_or(1.0) * crate::util::rf(&mut self.rng, 0.5, 0.9);
         self.blood_decal(b.pos, sz, team == Team::Infected);
+        self.parts.burst(Fx::Mist, b.center(), Vec3::Y, 8, 1.2);
+        if team == Team::Infected {
+            let n = self.rng.usize(0..3);
+            for _ in 0..n {
+                let r = &mut self.rng;
+                let v = Vec3::new(rf(r, -2.5, 2.5), rf(r, 2.0, 4.5), rf(r, -2.5, 2.5));
+                let sc = rf(r, 0.7, 1.3);
+                self.spawn_gib("Gib_Chunk", b.center(), v, sc, [0.75, 0.7, 0.72, 0.0]);
+            }
+        }
         if self.pl.lock == Some(e) {
             self.pl.lock = None;
         }
-        let by_player = killer.map(|k| k == self.player || self.team(k) == Some(Team::Ally)).unwrap_or(false) || (b.pos - self.ppos()).length() < 9.0;
+        let by_player = killer.map(|k| k == self.player || self.team(k) == Some(Team::Ally) || self.is_guest(k)).unwrap_or(false) || (b.pos - self.ppos()).length() < 9.0;
         if let Some(f) = self.w.foe.get(e).cloned() {
             if let Some(o) = f.origin {
                 self.consumed.insert(o);

@@ -40,6 +40,13 @@ fn hg(c: f32, g: f32) -> f32 {
     return (1.0 - g2) / pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5);
 }
 
+fn bayer(p: vec2<f32>) -> f32 {
+    let x = u32(p.x) & 3u;
+    let y = u32(p.y) & 3u;
+    var m = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    return (m[y * 4u + x] + 0.5) / 16.0;
+}
+
 fn aces(x: vec3<f32>) -> vec3<f32> {
     return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
 }
@@ -72,6 +79,13 @@ fn fs_post(in: FsIn) -> @location(0) vec4<f32> {
     let strain = G.fx.w;
     let px = vec2<i32>(clamp(uv, vec2<f32>(0.0), vec2<f32>(0.999)) * G.screen.xy);
     var col = textureLoad(t_scene, px, 0).rgb;
+    if (G.post.x < 0.5) {
+        // a lens's lateral fringing, only towards the edges of the frame
+        let e = (uv - 0.5) * dot(uv - 0.5, uv - 0.5) * 0.012;
+        let pr = vec2<i32>(clamp(uv + e, vec2<f32>(0.0), vec2<f32>(0.999)) * G.screen.xy);
+        let pb = vec2<i32>(clamp(uv - e, vec2<f32>(0.0), vec2<f32>(0.999)) * G.screen.xy);
+        col = vec3<f32>(textureLoad(t_scene, pr, 0).r, col.g, textureLoad(t_scene, pb, 0).b);
+    }
     if (strain > 0.01) {
         let off = (uv - 0.5) * 0.012 * strain * (1.0 + 0.5 * sin(G.cam_pos.w * 7.0));
         let pr = vec2<i32>(clamp(uv + off, vec2<f32>(0.0), vec2<f32>(0.999)) * G.screen.xy);
@@ -212,7 +226,8 @@ fn fs_post(in: FsIn) -> @location(0) vec4<f32> {
     let dens_here = fog_density(ro + rd * min(dist, 6.0), tnow);
     col = col * trans + scat + pls * min(dens_here, 0.06) * G.fog_par.w * 0.4;
 
-    col = col + textureSampleLevel(t_bloom, s_lin, uv, 0.0).rgb * 0.45;
+    // the CRT filter glows more: halation in the tube's glass
+    col = col + textureSampleLevel(t_bloom, s_lin, uv, 0.0).rgb * select(0.45, 1.6, G.post.x > 0.5 && G.post.x < 1.5);
 
     // exposure, filmic tonemap, grade
     col = col * G.grade.rgb * G.screen.w;
@@ -223,12 +238,19 @@ fn fs_post(in: FsIn) -> @location(0) vec4<f32> {
     col = col * (1.0 - G.fx.z * smoothstep(0.4, 1.0, vg));
     col = mix(col, col * vec3<f32>(1.25, 0.7, 1.3), strain * smoothstep(0.2, 0.75, vg) * (0.7 + 0.3 * sin(G.cam_pos.w * 3.0)));
     col = pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
-    // film grain, strongest in the mid-tones
-    let grain = hash21(in.pos.xy + vec2<f32>(fract(G.cam_pos.w * 7.13) * 431.0, fract(G.cam_pos.w * 3.71) * 977.0)) - 0.5;
-    col = col + grain * G.fx.x * (0.3 + 0.7 * (1.0 - abs(l * 2.0 - 1.0)));
+    if (G.post.x < 0.5) {
+        // film grain, strongest in the mid-tones (the retro filters bring their own noise)
+        let grain = hash21(in.pos.xy + vec2<f32>(fract(G.cam_pos.w * 7.13) * 431.0, fract(G.cam_pos.w * 3.71) * 977.0)) - 0.5;
+        col = col + grain * G.fx.x * (0.3 + 0.7 * (1.0 - abs(l * 2.0 - 1.0)));
+    }
     col = mix(col, vec3<f32>(1.0), G.counts.w);
     col = col * (1.0 - G.counts.z);
-    // half-LSB dither against banding in the fog gradients
-    col = col + (ign(in.pos.xy) - 0.5) / 255.0;
+    if (G.post.x > 2.5) {
+        // 32-BIT filter: 15-bit colour with ordered dithering, like the consoles it imitates
+        col = floor(col * 31.0 + (bayer(in.pos.xy) - 0.5) * 1.4 + 0.5) / 31.0;
+    } else {
+        // half-LSB dither against banding in the fog gradients
+        col = col + (ign(in.pos.xy) - 0.5) / 255.0;
+    }
     return vec4<f32>(col, 1.0);
 }
