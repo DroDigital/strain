@@ -27,7 +27,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "assets")
 CACHE = os.environ.get("STRAIN_ASSET_CACHE", os.path.join(ROOT, "target", "asset-cache"))
 UA = {"User-Agent": "strain-asset-fetch/1.0"}
-TEX_SIZE = 256
+TEX_SIZE = 512
 
 CREDITS = []
 
@@ -45,7 +45,9 @@ def fetch(url, dest):
 
 
 # ---------------------------------------------------------------------------------------------
-# Textures: ambientCG (CC0). Colour maps, downscaled to TEX_SIZE.
+# Textures: ambientCG (CC0). Each surface keeps two TEX_SIZE maps: `<name>.png` (colour) and
+# `<name>_n.png` (material: R/G tangent-space normal in OpenGL convention, B roughness, A ambient
+# occlusion). The game's PBR shader reads both.
 TEXTURES = {
     "asphalt": "Asphalt031",
     "paving": "PavingStones128",
@@ -76,6 +78,30 @@ TEXTURES = {
 }
 
 
+def _material_map(zf, size):
+    """Pack NormalGL (RG), Roughness (B) and AmbientOcclusion (A) into one RGBA image."""
+    from PIL import Image, ImageOps
+
+    def get(pat, mode):
+        n = next((n for n in zf.namelist() if re.search(pat, n)), None)
+        if n is None:
+            return None
+        return Image.open(io.BytesIO(zf.read(n))).convert(mode).resize((size, size), Image.LANCZOS)
+
+    nrm = get(r"_NormalGL\.jpg$", "RGB")
+    if nrm is None:
+        nrm = get(r"_NormalDX\.jpg$", "RGB")
+        if nrm is not None:
+            r, g, b = nrm.split()
+            nrm = Image.merge("RGB", (r, ImageOps.invert(g), b))
+    if nrm is None:
+        nrm = Image.new("RGB", (size, size), (128, 128, 255))
+    rough = get(r"_Roughness\.jpg$", "L") or Image.new("L", (size, size), 180)
+    ao = get(r"_AmbientOcclusion\.jpg$", "L") or Image.new("L", (size, size), 255)
+    r, g, _ = nrm.split()
+    return Image.merge("RGBA", (r, g, rough, ao))
+
+
 def textures():
     out = os.path.join(OUT, "textures")
     os.makedirs(out, exist_ok=True)
@@ -86,9 +112,11 @@ def textures():
         with zipfile.ZipFile(z) as zf:
             color = next(n for n in zf.namelist() if re.search(r"_(Color|Diffuse)\.jpg$", n))
             im = Image.open(io.BytesIO(zf.read(color))).convert("RGB")
+            mat = _material_map(zf, TEX_SIZE)
         im = im.resize((TEX_SIZE, TEX_SIZE), Image.LANCZOS)
         im.save(os.path.join(out, f"{name}.png"), optimize=True)
-        CREDITS.append(("texture", f"textures/{name}.png", f"ambientCG {asset}", f"https://ambientcg.com/view?id={asset}", "CC0 1.0"))
+        mat.save(os.path.join(out, f"{name}_n.png"), optimize=True)
+        CREDITS.append(("texture", f"textures/{name}.png, textures/{name}_n.png", f"ambientCG {asset}", f"https://ambientcg.com/view?id={asset}", "CC0 1.0"))
         print("texture", name, asset)
 
 
@@ -103,9 +131,10 @@ QZ_GLTF_FOLDERS = {
 }
 MODELS = [
     # characters (skinned, animated)
-    "Characters_Lis_SingleWeapon", "Characters_Matt_SingleWeapon", "Characters_Sam_SingleWeapon",
-    "Characters_Shaun_SingleWeapon", "Characters_GermanShepherd",
-    "Zombie_Basic", "Zombie_Chubby", "Zombie_Ribcage", "Zombie_Arm",
+    # the humans and infected are built on Universal Base Characters (tools/blender/build_humans.py,
+    # build_infected.py); from the kit we keep a reference human and the zombie whose clips are
+    # retargeted onto the realistic skeletons
+    "Characters_Matt_SingleWeapon", "Zombie_Basic",
     # weapons
     "Axe", "Knife", "Rifle", "Spear", "WoodenBat_Barbed", "WoodenBat_Saw", "Pistol",
     # street props

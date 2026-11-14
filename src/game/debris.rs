@@ -1,5 +1,7 @@
 //! Loose street clutter as simple rigid bodies: kicked by anyone walking through it, thrown by
-//! explosions and heavy blows, tumbling and bouncing until it settles.
+//! explosions and heavy blows, tumbling and bouncing until it settles. Breakable props (pallets,
+//! barrels, barriers, couches, hydrants...) shatter into pieces of their own geometry when a blow
+//! or blast is strong enough, and the pieces join the debris.
 use super::Game;
 use crate::particles::Fx;
 use crate::util::rf;
@@ -47,6 +49,64 @@ impl Game {
             };
             self.debris.push(Debris { id, key, pos: t, vel: Vec3::ZERO, rot: r, spin: Vec3::ZERO, scale: s.x, tint, mass, asleep: true, life: f32::INFINITY });
         }
+    }
+
+    /// Break every breakable prop near `p` that `force` is enough for. Returns how many broke.
+    pub fn shatter_near(&mut self, p: Vec3, r: f32, force: f32, dir: Vec3) -> usize {
+        let keys: Vec<(i32, i32)> = {
+            let k = self.area.key(p);
+            (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| (k.0 + dx, k.1 + dz))).collect()
+        };
+        let mut broken: Vec<((i32, i32), &'static str, Mat4, [f32; 4])> = Vec::new();
+        for key in keys {
+            let Some(c) = self.area.chunks.get_mut(&key) else { continue };
+            let mut i = 0;
+            while i < c.props.len() {
+                let (name, m, tint) = c.props[i];
+                let tough = toughness(name);
+                let centre = m.w_axis.truncate() + Vec3::Y * 0.5;
+                if tough > 0.0 && force >= tough && (centre - p).length() < r + 0.6 {
+                    c.props.remove(i);
+                    // its collision box goes with it
+                    let at = m.w_axis.truncate();
+                    if let Some(ci) = c.cols.iter().position(|b| {
+                        let bc = (b.min + b.max) * 0.5;
+                        (Vec3::new(bc.x, 0.0, bc.z) - Vec3::new(at.x, 0.0, at.z)).length() < 0.35 && b.max.y < 3.0
+                    }) {
+                        c.cols.remove(ci);
+                    }
+                    broken.push((key, name, m, tint));
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        let n = broken.len();
+        for (key, name, m, tint) in broken {
+            let Some(frags) = self.lib.fragments.get(name).cloned() else { continue };
+            let (s, rot, t) = m.to_scale_rotation_translation();
+            let centre = m.transform_point3(frags.iter().fold(Vec3::ZERO, |a, f| a + f.1) / frags.len().max(1) as f32);
+            for (id, c) in frags {
+                let pos = m.transform_point3(c);
+                let out = (pos - centre).normalize_or_zero();
+                let r = &mut self.rng;
+                let vel = out * rf(r, 1.0, 3.0) * force.sqrt() + dir * force * rf(r, 0.4, 0.9) + Vec3::Y * rf(r, 1.0, 3.0);
+                let spin = crate::util::rand_dir(r) * rf(r, 3.0, 12.0);
+                self.debris.push(Debris { id, key, pos, vel, rot, spin, scale: s.x, tint, mass: 0.5, asleep: false, life: 45.0 });
+            }
+            let soft = matches!(name, "Couch" | "Pallet" | "Chest");
+            self.parts.burst(Fx::Dust, t + Vec3::Y * 0.4, dir, 12, 1.4);
+            self.parts.burst(Fx::Bone, t + Vec3::Y * 0.4, dir + Vec3::Y, if soft { 18 } else { 8 }, 1.3);
+            if name == "FireHydrant" {
+                // a burst main: a white jet that rains back down
+                self.parts.burst(Fx::Water, t + Vec3::Y * 0.3, Vec3::Y * 2.0, 60, 2.0);
+                self.hydrants.push((t + Vec3::Y * 0.3, 12.0));
+            }
+            self.audio.play_at(if soft { crate::audio::Sfx::HitHeavy } else { crate::audio::Sfx::Block }, t, 0.8, rf(&mut self.rng, 0.6, 0.85));
+        }
+        // the debris that was already loose gets thrown too
+        self.debris_impulse(p, r + 0.8, force * 1.5);
+        n
     }
 
     pub fn despawn_debris(&mut self, key: (i32, i32)) {
@@ -98,6 +158,15 @@ impl Game {
     }
 
     pub fn debris_tick(&mut self, dt: f32) {
+        // burst hydrants keep spraying for a while
+        let mut jets = std::mem::take(&mut self.hydrants);
+        for j in &mut jets {
+            j.1 -= dt;
+            let n = if j.1 > 2.0 { 6 } else { 2 };
+            self.parts.burst(Fx::Water, j.0, Vec3::Y * 2.2, n, 1.6 * (j.1 / 12.0).max(0.3));
+        }
+        jets.retain(|j| j.1 > 0.0);
+        self.hydrants = jets;
         self.bleed_tick(dt);
         if self.debris.is_empty() {
             return;
@@ -106,6 +175,7 @@ impl Game {
             d.life -= dt;
         }
         self.debris.retain(|d| d.life > 0.0);
+        self.debris.truncate(400);
         // anyone moving through clutter kicks it along
         let mut kicks: Vec<(usize, Vec3)> = Vec::new();
         for (i, d) in self.debris.iter().enumerate() {
@@ -173,5 +243,16 @@ impl Game {
                 self.inst.push(d.id, Instance::new(m, d.tint, -1.0));
             }
         }
+    }
+}
+
+/// Force needed to break a prop (0 = unbreakable).
+pub fn toughness(name: &str) -> f32 {
+    match name {
+        "Pallet" | "Chest" => 1.2,
+        "Barrel" | "PlasticBarrier" | "Pipes" => 2.2,
+        "TrafficBarrier_1" | "TrafficBarrier_2" | "Couch" => 3.0,
+        "FireHydrant" => 4.5,
+        _ => 0.0,
     }
 }

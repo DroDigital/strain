@@ -110,7 +110,7 @@ class Builder:
     def __init__(self, name, base, seed=1):
         self.name = name
         self.base = base
-        self.g = Glb(os.path.join(MODELS, base + ".glb"))
+        self.g = Glb(base if base.endswith(".glb") else os.path.join(MODELS, base + ".glb"))
         self.rng = random.Random(seed)
         self.parts = []
         self.joint_names = self.g.joint_names()
@@ -639,6 +639,21 @@ def part_arrays(b, part, ao):
     return pos, nrm, uv, col, j, w, tri
 
 
+def seam_normals(pos, tri, old):
+    """Smooth vertex normals of a deformed mesh, welded by position."""
+    key = np.round(pos * 1e5).astype(np.int64)
+    _, inv = np.unique(key, axis=0, return_inverse=True)
+    inv = inv.ravel()
+    fn = np.cross(pos[tri[:, 1]] - pos[tri[:, 0]], pos[tri[:, 2]] - pos[tri[:, 0]])
+    acc = np.zeros((inv.max() + 1, 3))
+    for k in range(3):
+        np.add.at(acc, inv[tri[:, k]], fn)
+    n = acc[inv]
+    ln = np.linalg.norm(n, axis=1, keepdims=True)
+    # vertices no triangle uses keep their old normal
+    return np.where(ln > 1e-12, n / np.maximum(ln, 1e-12), old)
+
+
 def write_model(b, out_path):
     body = make_body_object(b)
     try:
@@ -658,27 +673,31 @@ def write_model(b, out_path):
         col[:, :3] *= (0.55 + 0.45 * np.clip(ao, 0, 1) ** 1.5)[:, None]
         a = q["prim"]["attributes"]
         a["POSITION"] = g.add(q["pos"].astype(np.float32), "pos", 5126, target=34962, minmax=True)
+        # the body was reshaped (inflated, torn, twisted): its normals follow the new surface,
+        # averaged across UV-seam duplicates so no creases appear
+        a["NORMAL"] = g.add(seam_normals(q["pos"], q["idx"].reshape(-1, 3), q["nrm"]).astype(np.float32), "nrm", 5126, target=34962)
         a["COLOR_0"] = g.add(np.round(np.clip(col, 0, 1) * 255), "color", 5121, target=34962)
         tri = q["idx"].reshape(-1, 3)
         if "drop" in q:
             tri = tri[~q["drop"][tri].any(axis=1)]
             q["prim"]["indices"] = g.add(tri.ravel().astype(np.uint32), "idx", 5125, target=34963)
-        # every face moves onto photo textures: skin (by majority of its corners) or cloth
-        sk = q["skin"][tri].sum(axis=1) >= 2
-        a["TEXCOORD_0"] = g.add(box_uv(q["pos"], q["nrm"], 2.5).astype(np.float32), "uv", 5126, target=34962)
-        mats = g.j.setdefault("materials", [])
-
-        def mat(name):
+        sk = q["skin"][tri].all(axis=1)
+        if sk.any():
+            # `C:` skins are per-character textures with their own UVs; `T:` layers tile
+            name = b.skin_tex if b.skin_tex.startswith("C:") else "T:" + b.skin_tex
+            mats = g.j.setdefault("materials", [])
             mi = next((i for i, m in enumerate(mats) if m.get("name") == name), None)
             if mi is None:
                 mats.append({"name": name, "pbrMetallicRoughness": {"baseColorFactor": [1, 1, 1, 1], "metallicFactor": 0, "roughnessFactor": 0.8}})
                 mi = len(mats) - 1
-            return mi
-
-        q["prim"]["material"] = mat("T:Cloth")
-        q["prim"]["indices"] = g.add(tri[~sk].ravel().astype(np.uint32), "idx", 5125, target=34963)
-        if sk.any():
-            g.j["meshes"][q["mesh"]]["primitives"].append({"attributes": dict(a), "indices": g.add(tri[sk].ravel().astype(np.uint32), "idx", 5125, target=34963), "material": mat("T:" + b.skin_tex)})
+            sa = dict(a)
+            if not name.startswith("C:"):
+                sa["TEXCOORD_0"] = g.add(box_uv(q["pos"], q["nrm"]).astype(np.float32), "uv", 5126, target=34962)
+            q["prim"]["indices"] = g.add(tri[~sk].ravel().astype(np.uint32), "idx", 5125, target=34963)
+            if (~sk).sum() == 0:
+                # nothing left on the original material: drop it rather than ship its vertices
+                g.j["meshes"][q["mesh"]]["primitives"].remove(q["prim"])
+            g.j["meshes"][q["mesh"]]["primitives"].append({"attributes": sa, "indices": g.add(tri[sk].ravel().astype(np.uint32), "idx", 5125, target=34963), "material": mi})
     # new parts, grouped per texture into primitives of the main body mesh
     groups = {}
     for p in b.parts:

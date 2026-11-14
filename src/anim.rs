@@ -106,10 +106,23 @@ pub struct Pose {
     pub aim: bool,
     pub extra_strike: f32,
     pub cower: f32,
-    /// a fresh blow's strength (0..1) and its direction in world space: the upper body is
-    /// knocked along it and recovers
-    pub flinch: f32,
-    pub hit_dir: Vec3,
+    /// velocity handed to the ragdoll by the killing blow, and where it landed
+    pub impulse: Vec3,
+    pub hit_at: Vec3,
+    /// recent hit: world direction * strength, bends the spine away from the blow
+    pub flinch: Vec3,
+    /// how much of the body is covered in blood (0..1)
+    pub blood: f32,
+}
+
+/// A severed body part: every joint in `joints` collapses into the stump at `root`.
+#[derive(Clone, Debug)]
+pub struct Cut {
+    pub root: usize,
+    pub joints: Vec<usize>,
+    /// the joint the stump sits on
+    pub attach: usize,
+    pub age: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -936,10 +949,56 @@ pub struct SkinRig {
     prev: Option<(ClipRef, f32)>,
     fade: f32,
     hold_last: bool,
+    /// physics takes over the skeleton on death
+    pub ragdoll: Option<crate::ragdoll::Ragdoll>,
+    /// root->hips transform at death, to keep growths attached to a ragdolled body
+    dead_root: Mat4,
+    pub cuts: Vec<Cut>,
+    /// world-space joint matrices from the last emitted frame
+    pub last_globals: Vec<Mat4>,
+}
+
+/// The retargeted clip-library names standing in for a kit clip on a realistic skeleton.
+fn realistic_clip(kind: SkinKind, kit: &str) -> &'static [&'static str] {
+    match (kind, kit) {
+        (_, "Cast") => &["Spell_Simple_Shoot"],
+        (SkinKind::Zombie, "Idle") => &["Z_Idle"],
+        (SkinKind::Zombie, "Walk") => &["Z_Walk"],
+        (SkinKind::Zombie, "Run") => &["Z_Run"],
+        (SkinKind::Zombie, "Punch") => &["Z_Attack"],
+        (SkinKind::Zombie, "Idle_Attack") => &["Z_Scream"],
+        (SkinKind::Zombie, "Run_Attack") => &["Z_Lunge"],
+        (SkinKind::Zombie, "Crawl") => &["Z_Crawl"],
+        (SkinKind::Zombie, "HitReact") => &["Z_HitReact"],
+        (_, "Idle") => &["Idle_Loop"],
+        (_, "Walk") => &["Walk_Loop"],
+        (_, "Run") => &["Jog_Fwd_Loop"],
+        (_, "Slash") | (_, "Stab") => &["Sword_Attack"],
+        (_, "Punch") => &["Punch_Cross"],
+        (_, "Duck") => &["Crouch_Idle_Loop"],
+        (_, "Crawl") => &["Crouch_Fwd_Loop"],
+        (_, "HitReact") | (_, "HitReact_Left") => &["Hit_Chest"],
+        (_, "Death") => &["Death01"],
+        (_, "Idle_Gun") => &["Pistol_Idle_Loop"],
+        (_, "Walk_Gun") => &["Walk_Loop"],
+        (_, "Run_Gun") => &["Jog_Fwd_Loop"],
+        _ => &[],
+    }
 }
 
 /// Name lookups resolved once per model.
-fn find_clip(lib: &Library, model: usize, names: &[&str]) -> Option<ClipRef> {
+fn find_clip(lib: &Library, model: usize, names: &[&str], kind: SkinKind) -> Option<ClipRef> {
+    // realistic bodies animate from the clip library retargeted onto their own skeleton
+    if let Some(&d) = lib.clip_donor.get(&model) {
+        for n in names {
+            for r in realistic_clip(kind, n) {
+                if let Some(c) = lib.models[d].clip(r) {
+                    return Some((d, c));
+                }
+            }
+        }
+        return None;
+    }
     let donors = ["Zombie_Basic", "Characters_Matt_SingleWeapon"];
     for n in names {
         if let Some(c) = lib.models[model].clip(n) {
@@ -962,7 +1021,7 @@ impl SkinRig {
     pub fn new(lib: &Library, model: &str, kind: SkinKind) -> Option<SkinRig> {
         let mi = *lib.index.get(model)?;
         let skin_id = *lib.skin_id.get(model)?;
-        Some(SkinRig { model: mi, skin_id, kind, scale: 1.0, tint: [1.0; 3], hide: Vec::new(), crawl: false, gun: false, cur: None, prev: None, fade: 1.0, hold_last: false })
+        Some(SkinRig { model: mi, skin_id, kind, scale: 1.0, tint: [1.0; 3], hide: Vec::new(), crawl: false, gun: false, cur: None, prev: None, fade: 1.0, hold_last: false, ragdoll: None, dead_root: Mat4::IDENTITY, cuts: Vec::new(), last_globals: Vec::new() })
     }
     pub fn hide_joint(&mut self, lib: &Library, name: &str) {
         if let Some(j) = lib.models[self.model].skeleton.find(name) {
@@ -1005,7 +1064,7 @@ const MIDDLE_L: &str = "Middle1.R";
 impl Rig {
     /// Animate and emit a skinned character. Returns false if the rig has no skin.
     #[allow(clippy::too_many_arguments)]
-    pub fn emit_skinned(&mut self, lib: &Library, dt: f32, pos: Vec3, yaw: f32, vel: Vec3, pose: &Pose, out: &mut InstList) -> bool {
+    pub fn emit_skinned(&mut self, lib: &Library, dt: f32, pos: Vec3, yaw: f32, vel: Vec3, pose: &Pose, out: &mut InstList, collide: &dyn Fn(Vec3, f32) -> (Vec3, bool)) -> bool {
         let Some(mut sk) = self.skin.take() else { return false };
         let model = &lib.models[sk.model];
         let skel = &model.skeleton;
@@ -1013,16 +1072,26 @@ impl Rig {
         let time = self.time;
         let speed = Vec3::new(vel.x, 0.0, vel.z).length();
         let height = (model.max.y - model.min.y).max(0.5);
-        let s = self.plan.scale * sk.scale * 1.75 / height;
+        // kit models are normalised to 1.75 m; realistic bodies keep their own stature
+        let s = self.plan.scale * sk.scale * if skel.realistic() { 1.0 } else { 1.75 / height };
 
         // ---- choose the clip
-        let clip = |names: &[&str]| find_clip(lib, sk.model, names);
+        let kind = sk.kind;
+        let clip = |names: &[&str]| find_clip(lib, sk.model, names, kind);
         let dur = |c: Option<ClipRef>| c.map(|(m, i)| lib.models[m].clips[i].duration).unwrap_or(1.0);
         let mut hold = false;
+        if pose.dead <= 0.0 && sk.ragdoll.is_some() {
+            // back on its feet (the player respawning)
+            sk.ragdoll = None;
+            sk.cuts.clear();
+        }
         let (c, t): (Option<ClipRef>, f32) = if pose.dead > 0.0 {
+            // the ragdoll owns the body; keep whatever clip was playing for the first frame
             hold = true;
-            let c = clip(&["Death"]);
-            (c, (pose.dead * dur(c)).min(dur(c) - 0.01))
+            match sk.cur {
+                Some((cc, ct)) => (Some(cc), ct),
+                None => (clip(&["Idle"]), 0.0),
+            }
         } else if let Some((sw, ph, _left)) = pose.swing {
             let names: &[&str] = match (sk.kind, sw) {
                 (SkinKind::Dog, _) => &["Attack"],
@@ -1044,7 +1113,7 @@ impl Rig {
             let c = clip(if sk.kind == SkinKind::Dog { &["HitReact_Left"] } else { &["HitReact"] });
             (c, (1.0 - pose.stagger) * dur(c) * 0.9)
         } else if pose.cast > 0.0 {
-            let c = clip(&["Punch"]);
+            let c = clip(&["Cast", "Punch"]);
             (c, (0.15 + pose.cast * 0.25) * dur(c))
         } else if pose.block > 0.0 {
             // fists or weapon raised: the opening frame of a punch is a guard
@@ -1089,23 +1158,6 @@ impl Rig {
         for &j in &sk.hide {
             sp.s[j] = Vec3::splat(0.001);
         }
-        if pose.flinch > 0.01 && pose.dead <= 0.0 {
-            let g0 = sp.globals(skel);
-            let d = Quat::from_rotation_y(-yaw) * pose.hit_dir;
-            let d = Vec3::new(d.x, d.y * 0.3, d.z).normalize_or_zero();
-            let axis = Vec3::Y.cross(d).normalize_or_zero();
-            if axis.length_squared() > 0.5 {
-                for (name, k) in [("Abdomen", 0.14), ("Torso", 0.22), ("Neck", 0.14), ("Head", 0.3), ("Back", 0.12), ("Torso2", 0.14), ("Neck2", 0.18)] {
-                    let Some(j) = skel.find(name) else { continue };
-                    let pg = match skel.joints[j].parent {
-                        Some(p) => g0[p].to_scale_rotation_translation().1,
-                        None => skel.root.to_scale_rotation_translation().1,
-                    };
-                    let qm = Quat::from_axis_angle(axis, pose.flinch * k);
-                    sp.r[j] = (pg.inverse() * qm * pg * sp.r[j]).normalize();
-                }
-            }
-        }
         let globals = sp.globals(skel);
 
         // ---- procedural layers on the whole body: roll, collapse, recoil, stagger lean
@@ -1121,24 +1173,68 @@ impl Rig {
         if pose.hide > 0.0 {
             body = Mat4::from_translation(Vec3::Y * -0.3 * pose.hide * s) * body;
         }
-        let world = Mat4::from_translation(pos) * Mat4::from_quat(rot) * body * Mat4::from_scale(Vec3::splat(s));
+        let alive_world = Mat4::from_translation(pos) * Mat4::from_quat(rot) * body * Mat4::from_scale(Vec3::splat(s));
+        let mut globals: Vec<Mat4> = globals.iter().map(|g| alive_world * *g).collect();
+        // directional flinch: the spine, neck and head snap away from a fresh hit, each joint
+        // turning everything above it
+        let axis = Vec3::Y.cross(pose.flinch);
+        if axis.length_squared() > 1e-5 && sk.ragdoll.is_none() {
+            let amt = pose.flinch.length().min(1.0);
+            let axis = axis.normalize();
+            for (name, k) in [("Abdomen", 0.16), ("Torso", 0.22), ("Torso2", 0.2), ("Neck", 0.2), ("Neck1", 0.2), ("Head", 0.28)] {
+                let Some(j) = skel.find(name) else { continue };
+                let pj = globals[j].w_axis.truncate();
+                let m = Mat4::from_translation(pj) * Mat4::from_axis_angle(axis, amt * k) * Mat4::from_translation(-pj);
+                for i in 0..globals.len() {
+                    let mut a = Some(i);
+                    while let Some(q) = a {
+                        if q == j {
+                            globals[i] = m * globals[i];
+                            break;
+                        }
+                        a = skel.joints[q].parent;
+                    }
+                }
+            }
+        }
+        if pose.dead > 0.0 && sk.ragdoll.is_none() {
+            let deform = crate::ragdoll::deforming(skel, model.skin_verts.iter().map(|v| (v.joints, v.weights)));
+            sk.ragdoll = Some(crate::ragdoll::Ragdoll::new(skel, &globals, &deform, vel, pose.impulse, pose.hit_at, s));
+            if let Some(h) = skel.find("Hips").or(skel.find("Body")) {
+                sk.dead_root = (Mat4::from_translation(pos) * Mat4::from_quat(rot)).inverse() * globals[h];
+            }
+        }
+        if let Some(rd) = sk.ragdoll.as_mut() {
+            rd.step(dt, collide);
+            globals = rd.globals(skel);
+        }
+        // severed parts fold into their stump
+        for c in &mut sk.cuts {
+            c.age += dt;
+            let at = globals[c.root].w_axis.truncate();
+            for &j in &c.joints {
+                globals[j] = Mat4::from_translation(at) * Mat4::from_scale(Vec3::splat(1e-4));
+            }
+        }
+        sk.last_globals.clone_from(&globals);
 
-        // ---- palette
+        // ---- palette (world space: the instance transform is the identity)
         let base = out.joints.len();
         for (g, j) in globals.iter().zip(&skel.joints) {
             let m = (*g * j.inverse_bind).transpose().to_cols_array();
             out.joints.push([m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]]);
         }
         let tint = sk.tint;
-        let mut inst = Instance::new(world, [tint[0], tint[1], tint[2], pose.glow * 0.15], base as f32);
-        inst.params[1] = pose.flash;
+        let mut inst = Instance::new(Mat4::IDENTITY, [tint[0], tint[1], tint[2], pose.glow * 0.15], base as f32);
+        // flash in the fraction, blood coverage in the integer part (decoded by the shader)
+        inst.params[1] = pose.flash.min(0.99) + (pose.blood.clamp(0.0, 1.0) * 15.0).floor();
         inst.params[3] = pose.dissolve;
         if base + skel.joints.len() <= crate::render::MAX_JOINTS {
             out.skinned.push((sk.skin_id, inst));
         }
 
         // ---- anchors from bones
-        let bone = |name: &str| skel.find(name).map(|j| world * globals[j]);
+        let bone = |name: &str| skel.find(name).map(|j| globals[j]);
         let bp = |name: &str, fallback: Vec3| bone(name).map(|m| m.transform_point3(Vec3::ZERO)).unwrap_or(fallback);
         let up = Vec3::Y;
         let fwd = rot * Vec3::Z;
@@ -1147,17 +1243,34 @@ impl Rig {
         let hips = bp("Hips", pos + up * 0.9 * s);
         self.head = head + up * 0.1 * s;
         self.chest = torso;
-        let hr = bone(MIDDLE_R);
-        let hl = bone(MIDDLE_L);
+        // realistic rigs hold the main weapon in the anatomical right hand (their attack clips swing it)
+        let real = skel.realistic();
+        let (hr, hl) = if real { (bone("hand_r"), bone("hand_l")) } else { (bone(MIDDLE_R), bone(MIDDLE_L)) };
         self.hand_r = hr.map(|m| m.transform_point3(Vec3::ZERO)).unwrap_or(torso + rot * Vec3::new(-0.3, -0.2, 0.3));
         self.hand_l = hl.map(|m| m.transform_point3(Vec3::ZERO)).unwrap_or(torso + rot * Vec3::new(0.3, -0.2, 0.3));
         self.weapon_tip = self.hand_r + fwd * 0.3;
 
         let mut e = Emit { out, flash: pose.flash, dissolve: pose.dissolve };
+        // ---- stumps: torn flesh around a splintered bone end
+        for c in &sk.cuts {
+            let at = globals[c.root].w_axis.truncate();
+            let from = globals[c.attach].w_axis.truncate();
+            let d = (at - from).normalize_or_zero();
+            let r = (0.055 * s * if skel.joints[c.root].name == "Head" { 1.4 } else if skel.joints[c.root].name.starts_with("Torso") { 2.6 } else { 1.0 }).max(0.03);
+            e.put(Prim::Sphere, segment(at - d * r * 0.6, at + d * r * 0.5, r, r, Vec3::Y), Tex::Flesh, [0.55, 0.12, 0.1], 0.0);
+            e.put(Prim::Spike, segment(at, at + d * r * 1.3, r * 0.35, r * 0.35, Vec3::Y), Tex::Bone, [0.95, 0.88, 0.78], 0.0);
+        }
         // ---- held weapons: model meshes where the kit has one, procedural otherwise
         let mut chain_i = 0usize;
-        let weapon_off = Mat4::from_rotation_translation(Quat::from_xyzw(0.43331832, 0.55688697, 0.43980914, 0.5555899), Vec3::new(0.0115709, 0.1046141, -0.0457764));
-        let gun_off = Mat4::from_rotation_translation(Quat::from_xyzw(0.43331832, 0.55688697, 0.43980914, 0.5555899), Vec3::new(0.0357486, 0.0454898, -0.0450469));
+        let (weapon_off, weapon_off_l, gun_off) = if real {
+            // the kit grip, mirrored onto the right hand and seated in the palm (see tools/blender)
+            let r = Mat4::from_rotation_translation(Quat::from_xyzw(0.0, 0.0, -std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2), Vec3::new(-0.0226, 0.0635, 0.0083));
+            let l = Mat4::from_rotation_translation(Quat::from_xyzw(0.0, 0.0, std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2), Vec3::new(0.0226, 0.0635, 0.0083));
+            (r, l, r)
+        } else {
+            let w = Mat4::from_rotation_translation(Quat::from_xyzw(0.43331832, 0.55688697, 0.43980914, 0.5555899), Vec3::new(0.0115709, 0.1046141, -0.0457764));
+            (w, Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)) * w, Mat4::from_rotation_translation(Quat::from_xyzw(0.43331832, 0.55688697, 0.43980914, 0.5555899), Vec3::new(0.0357486, 0.0454898, -0.0450469)))
+        };
         if sk.gun {
             if let (Some(m), Some(&id)) = (hr, lib.static_id.get("Rifle")) {
                 let wm = m * gun_off;
@@ -1182,7 +1295,7 @@ impl Rig {
                 Some((id, sc)) => {
                     let mut wm = hm * weapon_off * Mat4::from_scale(Vec3::splat(sc));
                     if slot == 1 {
-                        wm = hm * Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)) * weapon_off * Mat4::from_scale(Vec3::splat(sc));
+                        wm = hm * weapon_off_l * Mat4::from_scale(Vec3::splat(sc));
                     }
                     e.out.push(id, Instance::new(wm, [w.tint[0], w.tint[1], w.tint[2], w.glow], -1.0));
                     if slot == 0 || self.plan.hands[0].is_none() {
@@ -1192,7 +1305,7 @@ impl Rig {
                 None => {
                     // procedural weapons (shields, bone blades, whips, catalysts) along the forearm
                     let hand = hm.transform_point3(Vec3::ZERO);
-                    let elbow = bp(if slot == 0 { "LowerArm.L" } else { "LowerArm.R" }, self.chest);
+                    let elbow = bp(if slot == 0 { if real { "lowerarm_r" } else { "LowerArm.L" } } else if real { "lowerarm_l" } else { "LowerArm.R" }, self.chest);
                     let fdir = (hand - elbow).normalize_or_zero();
                     let swinging = pose.swing.is_some();
                     let wd = if swinging { (fdir + fwd * 0.6).normalize_or_zero() } else { (fdir * 0.4 + up * 0.6 + fwd * 0.5).normalize_or_zero() };
@@ -1204,8 +1317,12 @@ impl Rig {
             }
         }
 
-        // ---- growths anchored to bones (in a body frame at the character's position)
-        let root = Mat4::from_translation(pos) * Mat4::from_quat(rot);
+        // ---- growths anchored to bones (in a body frame at the character's position; a ragdoll
+        // carries that frame along with its hips)
+        let root = match (sk.ragdoll.is_some(), skel.find("Hips").or(skel.find("Body"))) {
+            (true, Some(h)) => globals[h] * sk.dead_root.inverse(),
+            _ => Mat4::from_translation(pos) * Mat4::from_quat(rot),
+        };
         let inv = root.inverse();
         let head_l = inv.transform_point3(head);
         let chest_l = inv.transform_point3(torso);

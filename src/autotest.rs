@@ -105,6 +105,21 @@ pub struct RoamStats {
     teleports: u32,
 }
 
+/// Hold a spawned actor still and harmless for a staged shot.
+fn gore_freeze(g: &mut Game, e: crate::ecs::Entity) {
+    if let Some(b) = g.w.body.get_mut(e) {
+        b.yaw = std::f32::consts::PI;
+    }
+    if let Some(ai) = g.w.ai.get_mut(e) {
+        ai.cd = 99.0;
+        ai.think = 99.0;
+        ai.special_cd = 99.0;
+    }
+    if let Some(a) = g.w.actor.get_mut(e) {
+        a.speed = 0.0;
+    }
+}
+
 fn teleport(g: &mut Game, p: Vec3) {
     g.rebuild_city(p);
 }
@@ -168,6 +183,198 @@ impl AutoTest {
                 Wait(40),
                 Shot("boss_look"),
                 Log("look done"),
+            ],
+            "props" => vec![
+                // the nearest vehicle and its street furniture, close up from two sides
+                Wait(10),
+                Do(|g| {
+                    std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                    g.new_game();
+                    g.tod = 0.45;
+                    let p = crate::world::chunk_center(1, (2, 2)) + Vec3::new(-24.5, 0.0, -10.0);
+                    teleport(g, p);
+                }),
+                Wait(20),
+                Do(|g| {
+                    let pp = g.ppos();
+                    let mut best: Option<(f32, Vec3)> = None;
+                    for c in g.area.chunks.values() {
+                        for (name, m, _) in &c.props {
+                            if name.starts_with("Vehicle_") {
+                                let q = m.w_axis.truncate();
+                                let d = (q - pp).length();
+                                if best.map(|b| d < b.0).unwrap_or(true) {
+                                    best = Some((d, q));
+                                }
+                            }
+                        }
+                    }
+                    if let Some((_, q)) = best {
+                        g.place_player(q + Vec3::new(2.6, 0.0, -3.4));
+                        g.cam.yaw = -0.6;
+                        g.cam.dist = 3.0;
+                        g.cam.pitch = 0.18;
+                        g.cam.snap = true;
+                    }
+                }),
+                Wait(30),
+                Shot("props_a"),
+                Do(|g| {
+                    g.cam.yaw += 1.6;
+                    g.cam.snap = true;
+                }),
+                Wait(20),
+                Shot("props_b"),
+                Log("props done"),
+            ],
+            "smash" => vec![
+                // destruction: the nearest breakable street props shatter on camera
+                Wait(10),
+                Do(|g| {
+                    std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                    g.new_game();
+                    g.tod = 0.45;
+                    let p = crate::world::chunk_center(1, (2, 2)) + Vec3::new(-24.5, 0.0, -10.0);
+                    teleport(g, p);
+                }),
+                Wait(20),
+                Do(|g| {
+                    // find breakable props and stand back from the nearest one
+                    let pp = g.ppos();
+                    let mut best: Option<(f32, Vec3)> = None;
+                    for c in g.area.chunks.values() {
+                        for (name, m, _) in &c.props {
+                            if crate::game::debris::toughness(name) > 0.0 {
+                                let q = m.w_axis.truncate();
+                                let d = (q - pp).length();
+                                if best.map(|b| d < b.0).unwrap_or(true) {
+                                    best = Some((d, q));
+                                }
+                            }
+                        }
+                    }
+                    if let Some((_, q)) = best {
+                        for c in g.area.chunks.values() {
+                            for (name, m, _) in &c.props {
+                                if (m.w_axis.truncate() - q).length() < 3.0 {
+                                    eprintln!("autotest: near the target: {name} at {:?}", m.w_axis.truncate());
+                                }
+                            }
+                        }
+                        g.place_player(q + Vec3::new(-2.6, 0.0, -1.6));
+                        g.cam.yaw = 1.0;
+                        g.cam.dist = 2.4;
+                        g.cam.pitch = 0.35;
+                        g.cam.snap = true;
+                    }
+                }),
+                Wait(30),
+                Shot("smash_before"),
+                Do(|g| {
+                    let p = g.ppos() + Vec3::new(2.6, 0.6, 1.6);
+                    let before = g.debris.len();
+                    let n = g.shatter_near(p, 1.0, 8.0, Vec3::new(0.6, 0.0, 0.8).normalize());
+                    eprintln!("autotest: shattered {n} props into {} pieces", g.debris.len() - before);
+                }),
+                Wait(5),
+                Shot("smash_impact"),
+                Wait(40),
+                Shot("smash_after"),
+                Log("smash done"),
+            ],
+            "gore" => vec![
+                // ragdolls and dismemberment: blades, clubs and blasts on every body type
+                Wait(10),
+                Do(|g| {
+                    std::env::set_var("STRAIN_SKIP_INTRO", "1");
+                    g.new_game();
+                    g.tod = 0.45;
+                    let p = crate::world::chunk_center(1, (2, 2)) + Vec3::new(-24.5, 0.0, -10.0);
+                    teleport(g, p);
+                    if let Some(a) = g.w.actor.get_mut(g.player) {
+                        a.max_hp = 1e9;
+                        a.hp = 1e9;
+                    }
+                }),
+                Wait(20),
+                Do(|g| {
+                    g.cam.dist = 5.5;
+                    g.cam.pitch = 0.25;
+                    g.cam.yaw = 0.0;
+                    let p = g.ppos();
+                    let kinds = ["rusher", "brute", "leaper", "spitter", "crawler", "shielded", "ambusher", "summoner"];
+                    for (k, id) in kinds.iter().enumerate() {
+                        let e = g.spawn_archetype(id, p + Vec3::new(k as f32 * 1.5 - 5.25, 0.0, 6.0), 1, 6, None);
+                        gore_freeze(g, e);
+                    }
+                    for k in 0..2 {
+                        let e = g.spawn_soldier(p + Vec3::new(k as f32 * 2.0 - 1.0, 0.0, 9.0), 5, 3);
+                        gore_freeze(g, e);
+                    }
+                }),
+                Wait(30),
+                Shot("gore_before"),
+                Do(|g| {
+                    let ids: Vec<u32> = g.w.ai.ids().collect();
+                    let pe = g.player;
+                    for (n, id) in ids.into_iter().enumerate() {
+                        let e = g.w.ent(id);
+                        if e == pe {
+                            continue;
+                        }
+                        let Some(b) = g.w.body.get(e).copied() else { continue };
+                        let dir = (Vec3::new(if n % 2 == 0 { 0.6 } else { -0.6 }, 0.0, 1.0)).normalize();
+                        // alternate blade, club and blast deaths
+                        let (edge, force, blast) = match n % 3 {
+                            0 => (1.0, 1.4, false),
+                            1 => (0.05, 1.4, false),
+                            _ => (0.3, 1.0, true),
+                        };
+                        let at = b.center() + Vec3::Y * if n % 2 == 0 { 0.7 } else { 0.0 } + Vec3::X * if n % 4 < 2 { 0.3 } else { -0.3 };
+                        g.cut_ctx = Some(crate::game::gore::CutCtx { edge, force, at, blast });
+                        let kind = if blast { crate::game::combat::DmgKind::Spell } else { crate::game::combat::DmgKind::Heavy };
+                        // make sure something comes off for the screenshot
+                        g.gore_force = true;
+                        g.deal(e, Some(pe), 1e6, 100.0, dir, kind, 6.0);
+                    }
+                    g.gore_force = false;
+                }),
+                Wait(4),
+                Shot("gore_impact"),
+                Wait(22),
+                Shot("gore_fall"),
+                Wait(120),
+                Shot("gore_rest"),
+                Do(|g| {
+                    g.cam.dist = 3.2;
+                    g.cam.pitch = 0.45;
+                }),
+                Wait(10),
+                Shot("gore_close"),
+                Do(|g| {
+                    // a limb taken off a living brute: it keeps coming on a stump
+                    let p = g.ppos();
+                    let e = g.spawn_archetype("brute", p + Vec3::new(0.0, 0.0, 3.0), 1, 6, None);
+                    gore_freeze(g, e);
+                    g.cam.dist = 3.5;
+                    g.cam.pitch = 0.15;
+                }),
+                Wait(10),
+                Do(|g| {
+                    let ids: Vec<u32> = g.w.ai.ids().collect();
+                    for id in ids {
+                        let e = g.w.ent(id);
+                        if g.w.actor.get(e).map(|a| a.alive && a.team == crate::game::comp::Team::Infected).unwrap_or(false) {
+                            let model = g.w.rig.get(e).and_then(|r| r.skin.as_ref()).map(|s| g.lib.models[s.model].name.clone()).unwrap_or_default();
+                            let prof = crate::game::gore::profile(&model);
+                            let i = prof.parts.iter().position(|p| p[0].starts_with("UpperArm")).unwrap_or(0);
+                            g.sever(e, &prof, i, Vec3::X, 1.2, true, false);
+                        }
+                    }
+                }),
+                Wait(14),
+                Shot("gore_stump"),
+                Log("gore done"),
             ],
             "zoo" => {
                 // each custom infected and boss up close, mid-animation, in daylight
@@ -237,7 +444,7 @@ impl AutoTest {
                 v.push(Log("filters done"));
                 v
             }
-            "gore" => vec![
+            "blood" => vec![
                 Wait(10),
                 Do(|g| {
                     std::env::set_var("STRAIN_SKIP_INTRO", "1");
@@ -273,12 +480,15 @@ impl AutoTest {
                 Wait(20),
                 Do(|g| {
                     let subjects = GORE.lock().unwrap().clone();
+                    // every killing blow here takes something off
+                    g.gore_force = true;
                     for e in subjects {
                         g.deal(e, Some(g.player), 9999.0, 0.0, Vec3::new(-0.2, 0.0, 1.0).normalize(), crate::game::combat::DmgKind::Heavy, 0.0);
                     }
-                    let gibs = g.debris.iter().filter(|d| d.key == crate::game::debris::GIB_KEY).count();
-                    let severed = g.w.rig.iter().filter(|(_, r)| r.skin.as_ref().map(|s| !s.hide.is_empty()).unwrap_or(false)).count();
-                    eprintln!("autotest: gore: gibs {gibs}, bodies with a severed part {severed}, bleeding stumps {}", g.bleeders.len());
+                    g.gore_force = false;
+                    let meat = g.debris.iter().filter(|d| d.key == crate::game::debris::GIB_KEY).count();
+                    let severed = g.w.rig.iter().filter(|(_, r)| r.skin.as_ref().map(|s| !s.cuts.is_empty()).unwrap_or(false)).count();
+                    eprintln!("autotest: gore: severed parts flying {}, bodies with a severed part {severed}, bleeding stumps {}, meat chunks {meat}", g.gibs.len(), g.bleeds.len());
                 }),
                 Wait(6),
                 Shot("gore_kill"),
@@ -427,7 +637,7 @@ impl AutoTest {
                 Do(|g| {
                     let pp = g.ppos();
                     let before = g.cam.view().inverse().x_axis.truncate();
-                    g.cam.update(1.0 / 60.0, glam::Vec2::new(0.3, 0.0), false, pp, None, &g.area, 0.0);
+                    g.cam.update(1.0 / 60.0, glam::Vec2::new(0.3, 0.0), false, pp, None, &g.area, 0.0, Default::default());
                     let fwd_after = (g.cam.target - g.cam.eye).normalize();
                     // turning right means the new forward leans toward the old screen-right
                     eprintln!("autotest: mouse right turns view right: {} (dot {:.2})", fwd_after.dot(before) > 0.0, fwd_after.dot(before));

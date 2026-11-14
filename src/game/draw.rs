@@ -33,9 +33,7 @@ fn visible(vp: &Mat4, min: Vec3, max: Vec3) -> bool {
 
 impl Game {
     fn pose_for(&self, e: Entity, a: &Actor) -> Pose {
-        // a blow knocks the upper body along it: sharp at first, recovering over a third of a second
-        let flinch = if a.since_hit < 0.4 { (1.0 - a.since_hit / 0.4).powi(2) } else { 0.0 };
-        let mut p = Pose { flash: a.flash, glow: a.glow, dissolve: a.dissolve, flinch, hit_dir: a.hit_dir, ..Default::default() };
+        let mut p = Pose { flash: a.flash, glow: a.glow, dissolve: a.dissolve, ..Default::default() };
         let act = &a.act;
         match act.kind {
             ActKind::Attack => {
@@ -76,10 +74,15 @@ impl Game {
             }
             ActKind::Idle => {}
         }
+        p.blood = a.blood;
+        p.flinch = a.hit_dir * a.hit_force * (-a.since_hit * 7.0).exp() * (1.0 - (-a.since_hit * 40.0).exp());
         if !a.alive {
-            p.dead = (a.dead_t / 0.7).min(1.0);
+            p.dead = (a.dead_t / 0.7).min(1.0).max(0.001);
             p.swing = None;
-            p.dissolve = ((a.dead_t - 5.0) / 2.0).clamp(0.0, 1.0);
+            p.impulse = a.impulse;
+            p.hit_at = a.hit_at;
+            // bodies lie where they fell for a long while before fading out
+            p.dissolve = ((a.dead_t - 26.0) / 3.0).clamp(0.0, 1.0);
         }
         if let Some(ai) = self.w.ai.get(e) {
             match ai.kind {
@@ -131,8 +134,10 @@ impl Game {
             let pose = self.pose_for(e, &a);
             let vel = b.vel + b.push;
             let lib = self.lib.clone();
+            let area = &self.area;
+            let collide = |p: Vec3, r: f32| super::gore::point_collide(area, p, r);
             if let Some(rig) = self.w.rig.get_mut(e) {
-                if !rig.emit_skinned(&lib, dt, pos, yaw, vel, &pose, &mut self.inst) {
+                if !rig.emit_skinned(&lib, dt, pos, yaw, vel, &pose, &mut self.inst, &collide) {
                     rig.update_emit(dt, pos, yaw, vel, &pose, &mut self.inst);
                 }
                 if e == self.player && rig.stepping() {
@@ -210,16 +215,25 @@ impl Game {
                 PickKind::Item(it) => {
                     let c = it.rarity.color();
                     let (w, h) = it.size(&self.t);
-                    self.inst.push(Prim::Cube as u32, inst(trs(p + Vec3::Y * 0.12, Quat::from_rotation_y(t * 1.5 + id as f32), Vec3::new(0.18 * w as f32, 0.12, 0.18 * h as f32)), Tex::Metal, c, 0.6));
-                    let tall = 2.0 + it.rarity as u8 as f32 * 1.6;
-                    let em = 0.6 + it.rarity as u8 as f32 * 0.35;
-                    self.inst.push(Prim::Card as u32, inst(Mat4::from_translation(p) * Mat4::from_rotation_y(-self.cam.yaw) * Mat4::from_scale(Vec3::new(0.06 + it.rarity as u8 as f32 * 0.015, tall, 1.0)), Tex::White, c, em));
+                    // a dropped kit bag lying in the road; better finds give off a faint glint
+                    let g = self.area.ground(p.x, p.z);
+                    let rest = Quat::from_rotation_y(id as f32 * 2.399) * Quat::from_rotation_z(0.08);
+                    self.inst.push(Prim::Cube as u32, inst(trs(Vec3::new(p.x, g + 0.07, p.z), rest, Vec3::new(0.16 * w as f32, 0.07, 0.14 * h as f32)), Tex::Tarp, [0.8, 0.78, 0.7], 0.0));
+                    let r = it.rarity as u8 as f32;
+                    if r >= 2.0 {
+                        let pulse = 0.75 + 0.25 * (t * 1.7 + id as f32).sin();
+                        self.inst.push(Prim::Card as u32, inst(Mat4::from_translation(Vec3::new(p.x, g, p.z)) * Mat4::from_rotation_y(-self.cam.yaw) * Mat4::from_scale(Vec3::new(0.02 + r * 0.004, 0.35 + r * 0.08, 1.0)), Tex::White, c, 0.12 * r * pulse));
+                    }
                 }
                 PickKind::Biomass(_) => {
-                    self.inst.push(Prim::Sphere as u32, inst(trs(p, Quat::IDENTITY, Vec3::splat(0.14 + 0.03 * (t * 6.0 + id as f32).sin())), Tex::GrowthGlow, [1.0, 0.4, 0.7], 1.6));
+                    // a twitching lump of living tissue
+                    let g = self.area.ground(p.x, p.z);
+                    let tw = 0.012 * (t * 9.0 + id as f32 * 3.1).sin() * (t * 2.3 + id as f32).sin();
+                    self.inst.push(Prim::Sphere as u32, inst(trs(Vec3::new(p.x, p.y.max(g + 0.07), p.z), Quat::from_rotation_y(id as f32), Vec3::new(0.13 + tw, 0.08 - tw, 0.11)), Tex::Flesh, [0.75, 0.35, 0.4], 0.12));
                 }
                 PickKind::Scrip(_) => {
-                    self.inst.push(Prim::Cube as u32, inst(trs(p, Quat::from_rotation_y(t * 3.0), Vec3::new(0.18, 0.04, 0.1)), Tex::Poster, [1.0, 0.9, 0.5], 0.5));
+                    let g = self.area.ground(p.x, p.z);
+                    self.inst.push(Prim::Cube as u32, inst(trs(Vec3::new(p.x, p.y.max(g + 0.02), p.z), Quat::from_rotation_y(id as f32 * 1.7), Vec3::new(0.16, 0.02, 0.08)), Tex::Poster, [0.85, 0.85, 0.7], 0.0));
                 }
             }
         }
@@ -332,9 +346,10 @@ impl Game {
             }
         }
         self.draw_debris(cam);
+        self.draw_gibs();
         // blood pooled where things died
-        for (id, m, life) in &self.decals {
-            let mut i = Instance::new(*m, [0.55, 0.05, 0.06, 0.0], -1.0);
+        for (id, m, life, tint) in &self.decals {
+            let mut i = Instance::new(*m, [tint[0], tint[1], tint[2], 0.0], -1.0);
             // fade out through dithered dissolve in the last seconds
             i.params[3] = if *life < 3.0 { 1.0 - life / 3.0 } else { 0.0 };
             self.inst.push(*id, i);
@@ -459,7 +474,11 @@ impl Game {
             self.distorts.push(Distort { pos: *p, radius: *rr, strength: *s, swirl: *sw });
         }
         let strain_vis = (self.pl.strain_frac() - 0.3).max(0.0) * 1.2 + if matches!(self.w.actor.get(self.player).map(|a| a.act.kind), Some(ActKind::Seized)) { 0.8 } else { 0.0 };
-        let env = self.build_env(strain_vis.min(1.0));
+        let mut env = self.build_env(strain_vis.min(1.0));
+        // a shallow lens: the player in focus, the street behind softens; heavier in cutscenes
+        env.dof_focus = self.cam.focus_dist;
+        env.dof = if self.cutscene.is_some() { 1.0 } else { 0.55 } + if self.slowmo > 0.0 { 0.6 } else { 0.0 };
+        env.motion_blur = 0.6;
         let (uw, uh) = r.ui_size();
         let mut ui = std::mem::take(&mut self.ui_buf);
         ui.clear();

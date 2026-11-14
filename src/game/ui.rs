@@ -148,7 +148,7 @@ pub fn menu_list(p: &mut Painter, x: f32, y: f32, w: f32, items: &[String], sel:
     }
 }
 
-pub const SETTINGS_ROWS: usize = 13;
+pub const SETTINGS_ROWS: usize = 15;
 
 impl Game {
     fn project(&self, p: Vec3, uw: f32, uh: f32) -> Option<Vec2> {
@@ -199,7 +199,10 @@ impl Game {
         let g = &s.gfx;
         let lvl = |v: u8| ["LOW", "MEDIUM", "HIGH"][v.min(2) as usize].to_string();
         vec![
-            ("INTERNAL RESOLUTION".into(), if g.scene_height() < g.internal_height { format!("{}P ({}P)", g.internal_height, g.scene_height()) } else { format!("{}P", g.internal_height) }),
+            ("RENDER RESOLUTION".into(), {
+                let chosen = if g.internal_height == 0 { "NATIVE".to_string() } else { format!("{}P", g.internal_height) };
+                if g.filter > 0 { format!("{chosen} ({}P)", g.scene_height_for(1080)) } else { chosen }
+            }),
             ("SHADOWS".into(), ["OFF", "LOW", "HIGH"][g.shadow_quality.min(2) as usize].into()),
             ("FOG QUALITY".into(), lvl(g.fog_quality)),
             ("PARTICLE DENSITY".into(), lvl(g.particle_density)),
@@ -223,9 +226,9 @@ impl Game {
         let cyc = |v: u8, n: u8| ((v as i32 + dir).rem_euclid(n as i32)) as u8;
         match row {
             0 => {
-                let opts = [360u32, 480, 540, 720];
-                let i = opts.iter().position(|v| *v == g.internal_height).unwrap_or(1) as i32;
-                g.internal_height = opts[(i + dir).clamp(0, 3) as usize];
+                let opts = [720u32, 900, 1080, 1440, 0];
+                let i = opts.iter().position(|v| *v == g.internal_height).unwrap_or(4) as i32;
+                g.internal_height = opts[(i + dir).clamp(0, 4) as usize];
             }
             1 => g.shadow_quality = cyc(g.shadow_quality, 3),
             2 => g.fog_quality = cyc(g.fog_quality, 3),

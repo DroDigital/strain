@@ -60,9 +60,46 @@ pub struct Skeleton {
     pub order: Vec<usize>,
 }
 impl Skeleton {
+    /// A joint by name. Gameplay code names bones the kit way (`Torso`, `UpperArm.L`, ...); on the
+    /// realistic (Unreal-style) skeletons those resolve to their counterparts.
     pub fn find(&self, name: &str) -> Option<usize> {
-        self.by_name.get(name).copied()
+        self.by_name.get(name).copied().or_else(|| alias(name).and_then(|a| self.by_name.get(&a).copied()))
     }
+    /// True for the realistic humanoid skeleton (Universal Base Characters / Animation Library).
+    pub fn realistic(&self) -> bool {
+        self.by_name.contains_key("pelvis")
+    }
+}
+
+/// Kit bone name -> Unreal-style humanoid bone name.
+pub fn alias(name: &str) -> Option<String> {
+    let (base, side) = match name.rsplit_once('.') {
+        Some((b, s)) if s == "L" || s == "R" => (b, Some(s.to_lowercase())),
+        _ => (name, None),
+    };
+    let ue = match base {
+        "Root" => "root",
+        "Body" | "Hips" => "pelvis",
+        "Abdomen" => "spine_01",
+        "Torso" | "Torso2" => "spine_03",
+        "Neck" | "Neck1" => "neck_01",
+        "Head" => "Head",
+        "Shoulder" => "clavicle",
+        "UpperArm" => "upperarm",
+        "LowerArm" => "lowerarm",
+        "Middle1" => "middle_01",
+        "Index1" => "index_01",
+        "Pinky1" => "pinky_01",
+        "Thumb1" => "thumb_01",
+        "UpperLeg" => "thigh",
+        "LowerLeg" => "calf",
+        "Foot" => "foot",
+        _ => return None,
+    };
+    Some(match side {
+        Some(s) => format!("{ue}_{s}"),
+        None => ue.to_string(),
+    })
 }
 
 pub struct Model {
@@ -239,6 +276,9 @@ pub fn load(name: &str, bytes: &[u8]) -> Option<Model> {
 
 /// Texture-array layer for a material named `T:<Tex>`.
 fn tex_layer(name: &str) -> Option<f32> {
+    if let Some(c) = name.strip_prefix("C:") {
+        return crate::render::textures::char_layer(c).map(|i| crate::render::textures::CHAR_BASE + i as f32);
+    }
     let t: crate::render::textures::Tex = ron::from_str(name.strip_prefix("T:")?).ok()?;
     Some(t as u32 as f32)
 }
@@ -325,7 +365,7 @@ impl Pose {
                     let q = sample_quat(&ch.times, v, time, ch.step);
                     self.r[j] = if weight >= 0.999 { q } else { self.r[j].slerp(q, weight) };
                 }
-                Track::T(v) if same => {
+                Track::T(v) if same || (src.joints[ch.joint].t - sk.joints[j].t).length() < 1e-3 => {
                     let p = sample_vec(&ch.times, v, time, ch.step);
                     self.t[j] = self.t[j].lerp(p, weight);
                 }
@@ -360,7 +400,7 @@ mod tests {
         assert!(all.len() > 40);
         let get = |n: &str| all.iter().find(|m| m.name == n).unwrap();
         let human = get("Characters_Matt_SingleWeapon");
-        let zombie = get("Zombie_Chubby");
+        let zombie = get("Zombie_Basic");
         assert!(human.skinned() && zombie.skinned());
         assert!(human.clip("Slash").is_some() && zombie.clip("Walk").is_some());
         let mut p = Pose::rest(&zombie.skeleton);
@@ -402,12 +442,89 @@ pub struct Library {
     pub static_id: HashMap<String, u32>,
     pub skin_id: HashMap<String, u32>,
     pub index: HashMap<String, usize>,
+    /// breakable props: fragment mesh ids and each fragment's centre in model space
+    pub fragments: HashMap<String, Vec<(u32, Vec3)>>,
+    /// realistic models: the clip library retargeted onto their skeleton
+    pub clip_donor: HashMap<usize, usize>,
+}
+
+/// Kit props that shatter, with roughly how many pieces.
+pub const BREAKABLE: [(&str, usize); 9] = [
+    ("Pallet", 7),
+    ("Barrel", 6),
+    ("PlasticBarrier", 5),
+    ("TrafficBarrier_1", 6),
+    ("TrafficBarrier_2", 6),
+    ("Couch", 8),
+    ("Chest", 6),
+    ("FireHydrant", 4),
+    ("Pipes", 5),
+];
+
+/// Split a mesh into `k` pieces by clustering its triangles (k-means on triangle centres).
+/// Each piece is re-centred on its own centre so it can tumble about it.
+pub fn fracture(m: &MeshBuilder, k: usize) -> Vec<(MeshBuilder, Vec3)> {
+    let tris: Vec<[u32; 3]> = m.idx.chunks(3).filter(|t| t.len() == 3).map(|t| [t[0], t[1], t[2]]).collect();
+    if tris.is_empty() {
+        return Vec::new();
+    }
+    let cen: Vec<Vec3> = tris.iter().map(|t| (Vec3::from(m.verts[t[0] as usize].pos) + Vec3::from(m.verts[t[1] as usize].pos) + Vec3::from(m.verts[t[2] as usize].pos)) / 3.0).collect();
+    let k = k.min(tris.len()).max(1);
+    // farthest-point seeds, then a few Lloyd iterations
+    let mut seeds = vec![cen[0]];
+    while seeds.len() < k {
+        let far = cen.iter().copied().max_by(|a, b| {
+            let da = seeds.iter().map(|s| (*s - *a).length_squared()).fold(f32::MAX, f32::min);
+            let db = seeds.iter().map(|s| (*s - *b).length_squared()).fold(f32::MAX, f32::min);
+            da.total_cmp(&db)
+        });
+        seeds.push(far.unwrap());
+    }
+    let mut owner = vec![0usize; tris.len()];
+    for _ in 0..8 {
+        for (i, c) in cen.iter().enumerate() {
+            owner[i] = (0..k).min_by(|&a, &b| (seeds[a] - *c).length_squared().total_cmp(&(seeds[b] - *c).length_squared())).unwrap();
+        }
+        let mut sum = vec![(Vec3::ZERO, 0.0f32); k];
+        for (i, c) in cen.iter().enumerate() {
+            sum[owner[i]].0 += *c;
+            sum[owner[i]].1 += 1.0;
+        }
+        for j in 0..k {
+            if sum[j].1 > 0.0 {
+                seeds[j] = sum[j].0 / sum[j].1;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for j in 0..k {
+        let mut mb = MeshBuilder::new();
+        let mut map: HashMap<u32, u32> = HashMap::new();
+        for (i, t) in tris.iter().enumerate() {
+            if owner[i] != j {
+                continue;
+            }
+            for &v in t {
+                let n = *map.entry(v).or_insert_with(|| {
+                    let mut vv = m.verts[v as usize];
+                    vv.pos = (Vec3::from(vv.pos) - seeds[j]).into();
+                    mb.verts.push(vv);
+                    mb.verts.len() as u32 - 1
+                });
+                mb.idx.push(n);
+            }
+        }
+        if !mb.idx.is_empty() {
+            out.push((mb, seeds[j]));
+        }
+    }
+    out
 }
 impl Library {
     /// Load every model, appending static meshes to the primitive buffer.
     pub fn build(prims: &mut MeshBuilder, ranges: &mut Vec<super::mesh::MeshRange>) -> Library {
         let models = load_all();
-        let mut lib = Library { models: Vec::new(), static_id: HashMap::new(), skin_id: HashMap::new(), index: HashMap::new() };
+        let mut lib = Library { models: Vec::new(), static_id: HashMap::new(), skin_id: HashMap::new(), index: HashMap::new(), fragments: HashMap::new(), clip_donor: HashMap::new() };
         let mut skin_n = 0u32;
         for m in models {
             if !m.mesh.idx.is_empty() {
@@ -415,6 +532,16 @@ impl Library {
                 ranges.push(super::mesh::MeshRange { first: prims.idx.len() as u32, count: m.mesh.idx.len() as u32, base: prims.verts.len() as i32 });
                 prims.verts.extend_from_slice(&m.mesh.verts);
                 prims.idx.extend_from_slice(&m.mesh.idx);
+                if let Some(&(_, k)) = BREAKABLE.iter().find(|b| b.0 == m.name) {
+                    let mut frags = Vec::new();
+                    for (mb, c) in fracture(&m.mesh, k) {
+                        frags.push((ranges.len() as u32, c));
+                        ranges.push(super::mesh::MeshRange { first: prims.idx.len() as u32, count: mb.idx.len() as u32, base: prims.verts.len() as i32 });
+                        prims.verts.extend_from_slice(&mb.verts);
+                        prims.idx.extend_from_slice(&mb.idx);
+                    }
+                    lib.fragments.insert(m.name.clone(), frags);
+                }
             }
             if m.skinned() {
                 lib.skin_id.insert(m.name.clone(), skin_n);
@@ -422,6 +549,20 @@ impl Library {
             }
             lib.index.insert(m.name.clone(), lib.models.len());
             lib.models.push(m);
+        }
+        // each realistic body takes its clips from the library whose skeleton matches its own
+        let libs: Vec<usize> = lib.models.iter().enumerate().filter(|(_, m)| m.name.starts_with("Clips_")).map(|(i, _)| i).collect();
+        for (i, m) in lib.models.iter().enumerate() {
+            if !m.skeleton.realistic() || m.name.starts_with("Clips_") {
+                continue;
+            }
+            let diff = |d: usize| -> f32 {
+                let s = &lib.models[d].skeleton;
+                m.skeleton.joints.iter().map(|j| s.by_name.get(&j.name).map(|&k| (s.joints[k].t - j.t).length()).unwrap_or(1.0)).sum()
+            };
+            if let Some(&d) = libs.iter().min_by(|a, b| diff(**a).total_cmp(&diff(**b))) {
+                lib.clip_donor.insert(i, d);
+            }
         }
         lib
     }
@@ -433,42 +574,78 @@ impl Library {
     }
 }
 #[cfg(test)]
-mod infected_tests {
-    /// The Blender-built infected keep their base model's skeleton and clips exactly (clips are
-    /// shared between models by bone name) and their new parts resolve to real texture layers.
+mod fracture_tests {
+    /// Breaking a prop keeps every triangle, in roughly the asked number of pieces.
     #[test]
-    fn custom_infected_match_their_bases() {
+    fn breakables_fracture_into_pieces() {
         let all = super::load_all();
-        let get = |n: &str| all.iter().find(|m| m.name == n).unwrap_or_else(|| panic!("missing model {n}"));
-        let pairs = [
-            ("Strain_Carrier", "Zombie_Basic"),
-            ("Strain_Shambler", "Zombie_Arm"),
-            ("Strain_Bulk", "Zombie_Chubby"),
-            ("Strain_Retch", "Zombie_Chubby"),
-            ("Strain_Larva", "Zombie_Ribcage"),
-            ("Strain_Bulwark", "Zombie_Basic"),
-            ("Strain_Lurker", "Zombie_Arm"),
-            ("Strain_Matron", "Zombie_Chubby"),
-            ("Strain_Skitter", "Characters_GermanShepherd"),
-            ("Strain_Digestor", "Zombie_Chubby"),
-            ("Strain_Geometer", "Zombie_Basic"),
-            ("Strain_MotherCinder", "Zombie_Chubby"),
-            ("Strain_Cantor", "Zombie_Basic"),
-            ("Strain_Seed", "Zombie_Arm"),
+        for (name, k) in super::BREAKABLE {
+            let m = all.iter().find(|m| m.name == name).unwrap_or_else(|| panic!("missing breakable {name}"));
+            let frags = super::fracture(&m.mesh, k);
+            let tris: usize = frags.iter().map(|f| f.0.idx.len()).sum();
+            assert_eq!(tris, m.mesh.idx.len(), "{name}: triangles lost");
+            assert!(frags.len() >= 2.min(k) && frags.len() <= k, "{name}: {} pieces", frags.len());
+        }
+    }
+}
+
+#[cfg(test)]
+mod infected_tests {
+    use glam::{Mat4, Vec3};
+    /// The Blender-built humans and infected stand on the realistic skeleton, draw their clips from
+    /// a retargeted library that has everything the game asks for, and every material resolves.
+    #[test]
+    fn realistic_characters_are_complete() {
+        let mut prims = crate::render::mesh::MeshBuilder::new();
+        let mut ranges = Vec::new();
+        let lib = super::Library::build(&mut prims, &mut ranges);
+        let names = [
+            "Human_Player", "Human_Soldier_M", "Human_Soldier_F", "Human_Civilian_M1", "Human_Civilian_M2", "Human_Civilian_F1", "Human_Civilian_F2",
+            "Strain_Carrier", "Strain_Shambler", "Strain_Bulk", "Strain_Retch", "Strain_Larva", "Strain_Bulwark", "Strain_Lurker", "Strain_Matron",
+            "Strain_Digestor", "Strain_Geometer", "Strain_MotherCinder", "Strain_Cantor", "Strain_Seed", "Strain_Skitter",
         ];
-        for (custom, base) in pairs {
-            let (c, b) = (get(custom), get(base));
-            assert!(c.skinned(), "{custom} is not skinned");
-            let names = |m: &super::Model| m.skeleton.joints.iter().map(|j| (j.name.clone(), j.r.to_array().map(|x| (x * 1e4).round() as i32))).collect::<Vec<_>>();
-            assert_eq!(names(c), names(b), "{custom} skeleton differs from {base}");
-            assert_eq!(c.clips.len(), b.clips.len(), "{custom} clips differ from {base}");
-            assert!(c.skin_verts.len() > b.skin_verts.len(), "{custom} has no new parts");
+        for n in names {
+            let i = *lib.index.get(n).unwrap_or_else(|| panic!("missing model {n}"));
+            let c = &lib.models[i];
+            assert!(c.skinned() && c.skeleton.realistic(), "{n} is not a realistic skinned model");
+            let d = *lib.clip_donor.get(&i).unwrap_or_else(|| panic!("{n} has no clip library"));
+            for clip in ["Idle_Loop", "Walk_Loop", "Jog_Fwd_Loop", "Sword_Attack", "Hit_Chest", "Z_Walk", "Z_Run", "Z_Attack", "Z_Crawl"] {
+                assert!(lib.models[d].clip(clip).is_some(), "{n}: library {} lacks {clip}", lib.models[d].name);
+            }
             let layers: std::collections::HashSet<i32> = c.skin_verts.iter().map(|v| v.uv[2] as i32).collect();
-            assert!(layers.iter().any(|&l| l > 0 && l < 250), "{custom} has no texture-layer parts");
-            assert!(!layers.contains(&0), "{custom} has a part with an unknown material");
-            let n = c.skin_verts.len() as u32;
-            assert!(c.skin_idx.iter().all(|&i| i < n), "{custom} index out of range");
-            assert!(c.skin_verts.iter().all(|v| (v.weights.iter().sum::<f32>() - 1.0).abs() < 0.02), "{custom} weights not normalised");
+            assert!(!layers.contains(&0), "{n} has a part with an unknown material");
+            assert!(layers.iter().any(|&l| l >= 300), "{n} has no per-character skin");
+            let nv = c.skin_verts.len() as u32;
+            assert!(c.skin_idx.iter().all(|&k| k < nv), "{n} index out of range");
+            assert!(c.skin_verts.iter().all(|v| (v.weights.iter().sum::<f32>() - 1.0).abs() < 0.02), "{n} weights not normalised");
+            // a sensible human stature
+            let h = c.max.y - c.min.y;
+            assert!((1.3..2.6).contains(&h), "{n} is {h} m tall");
+        }
+        // clips keep the feet on the floor: the lowest skinned vertex stays near the ground
+        for n in ["Human_Player", "Human_Civilian_F1", "Strain_MotherCinder", "Strain_Carrier"] {
+            let i = lib.index[n];
+            let m = &lib.models[i];
+            let d = &lib.models[lib.clip_donor[&i]];
+            for clip in ["Idle_Loop", "Walk_Loop", "Z_Idle", "Z_Walk", "Z_Attack", "Z_Scream", "Sword_Attack"] {
+                let c = &d.clips[d.clip(clip).unwrap()];
+                let mut lo = f32::MAX;
+                for t in [0.0, 0.3, 0.6] {
+                    let mut p = super::Pose::rest(&m.skeleton);
+                    p.sample(&m.skeleton, &d.skeleton, c, c.duration * t, 1.0);
+                    let g = p.globals(&m.skeleton);
+                    let pal: Vec<Mat4> = g.iter().zip(&m.skeleton.joints).map(|(g, j)| *g * j.inverse_bind).collect();
+                    for v in m.skin_verts.iter().step_by(7) {
+                        let mut q = Vec3::ZERO;
+                        for k in 0..4 {
+                            q += pal[v.joints[k] as usize].transform_point3(Vec3::from(v.pos)) * v.weights[k];
+                        }
+                        lo = lo.min(q.y);
+                    }
+                }
+                eprintln!("{n} {clip}: lowest point {lo:.3} m (bind {:.3})", m.min.y);
+                assert!(lo.abs() < 0.12, "{n} {clip}: feet {lo} m off the floor");
+            }
         }
     }
 }

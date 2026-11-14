@@ -10,14 +10,29 @@ glam, bytemuck, serde/ron, directories, fastrand, plus gltf and png for reading 
 — renderer, skinning, animation blending, ECS, physics, AI, mixer — is custom; the art and sound
 combine CC0 (public domain) assets with procedural generation:
 
-- **Characters, weapons, vehicles and street props**: Quaternius *Zombie Apocalypse Kit* (rigged,
-  animated glTF).
-- **The infected**: fourteen custom models (every archetype and boss) made in Blender on top of
-  the kit's zombie rigs. Bone spikes, tentacles, tumours, chitin plates, maws, crystals and glowing
-  sacs are modelled in and skinned to the original skeletons. The bodies are reshaped and
-  repainted with veins, bruising, blood and ember cracks, and ambient occlusion is baked in.
-  Affixes and mutations still add procedural growths on top.
-- **Surfaces**: ambientCG photo textures, combined with procedural windows, signs, veins and glow.
+- **People**: Quaternius *Universal Base Characters* — anatomically proportioned male and female
+  bodies with their own skin, eyes and hair — dressed in Blender: clothing is grown from body
+  regions and draped by shrink-wrapping (it bridges hollows and rests on the body like cloth, and
+  the skin beneath is removed), then torn, holed and bloodied for the infected. The player,
+  two soldiers and four civilians.
+- **Animation**: Quaternius *Universal Animation Library* plus the Zombie Apocalypse Kit's zombie
+  clips, retargeted offline onto each body's own skeleton (world-space, bone directions aligned,
+  grounded by the feet every frame).
+- **The infected**: every archetype and boss is a person the virus has rebuilt, modelled in
+  Blender on the realistic bodies: a jaw torn open to the throat, ribs levered out of a ragged
+  chest, a skull split and peeled back, a body bloated with tumours, a bile sac swelling the
+  throat, a legless torso dragging its guts, a ribcage fused into armour, blade fingers and
+  grown-over eyes, a womb-sac of larvae, a belly opened into a stomach-maw, crystals forced
+  through the skull, a body charred and still burning, mouths up the arms and chest, a flower
+  for a head, a leaper whose head hangs backwards off a broken neck. Their skins are generated
+  from the real ones: pallid and veined with sores, flayed to the muscle, charred with glowing
+  cracks, rotting, drained white. Affixes and mutations still add procedural growths on top.
+- **Weapons, vehicles and street props**: Quaternius *Zombie Apocalypse Kit* (glTF), re-surfaced by
+  `tools/blender/props.py`: each flat colour swatch becomes a photo material chosen by colour and
+  context (painted metal for car bodies and containers, metal, rust, wood, concrete, upholstery,
+  rubber, glass, plastic) with grime toward the ground.
+- **Surfaces**: ambientCG photo textures with their normal, roughness and occlusion maps, combined
+  with procedural windows, signs, veins and glow.
 - **Sound effects and ambience**: recorded CC0 packs from OpenGameArt, several variants per sound.
 - **Music**, UI sounds, sirens and radio: synthesised in real time.
 
@@ -128,6 +143,16 @@ Each renders the scene at its own lower resolution, so it costs less than the un
 - **Rifts.** Four meteor fragments open onto alien dimensions — the Gut, the Lattice, the Kiln and
   the Choir — each a procedurally arranged dungeon with its own rules and a fixed multi-phase
   boss. Close all four to open the crater and the final boss.
+- **Bodies.** The dead go limp: a Verlet ragdoll built from each model's own skeleton takes the
+  killing blow and tumbles against the street and walls. Every creature comes apart its own way —
+  blades sever, clubs crush heads, blasts tear off several pieces — and a severed part flies as a
+  piece of that creature's mesh. Wounds differ per creature: arterial spray, acid that pools and
+  burns, embers, crystal shards that shatter, larvae spilling out, spores, black mist. A thing
+  that loses a leg crawls after you; one that loses an arm hits softer. Blood soaks into bodies
+  and spatters and pools on the ground.
+- **Destruction.** Pallets, barrels, barriers, crates, couches, pipes and hydrants break into
+  pieces of their own geometry under heavy blows, slams and blasts (brutes smash barricades too);
+  loose clutter is kicked and thrown, burst hydrants jet water.
 - **A living city.** Soldier squads with radio chatter, civilians hiding or fleeing, people turning
   in the street, helicopters, a day-night cycle, rain and spore storms, notes and graffiti,
   abandoned checkpoints, and short in-engine cutscenes for the opening, every boss and the ending.
@@ -136,7 +161,8 @@ Each renders the scene at its own lower resolution, so it costs less than the un
 
 `python3 tools/fetch_assets.py` reproduces `assets/` from the original sources (needs Pillow and
 ffmpeg); the processed files are committed, so building never needs the network. Add a source by
-extending the tables at the top of the script.
+extending the tables at the top of the script. Textures come at 512 px with a packed material map
+(`*_n.png`: normal, roughness, occlusion).
 
 The infected (`assets/models/Strain_*.glb`) are built by `tools/blender/build_enemies.py`. The
 recipes are in `tools/blender/recipes.py`. Run it with any Python that can `import bpy` (Blender's
@@ -152,17 +178,45 @@ byte-for-byte identical (clips are shared between models by bone name). New part
 named `T:<Tex>`, which select one of the game's texture layers. A vertex colour alpha below 1
 marks emission.
 
+The people and the infected are built from the Universal Base Characters and Universal Animation
+Library packs, which the scripts download (free, CC0) into `target/asset-cache`:
+
+```bash
+python -I tools/blender/build_humans.py                     # people, clip libraries, skin/hair/eye textures
+python -I tools/blender/build_infected.py Strain_Carrier    # one infected (run one per process)
+```
+
+`build_humans.py` writes `models/Human_*.glb` (each with its own skeleton), the skeleton-only clip
+libraries `models/Clips_Male.glb` / `Clips_Female.glb`, and per-character textures in
+`assets/characters/` (1024 px, with a material map: normal, roughness, subsurface). Materials
+named `C:<name>` select one of those; `T:<Tex>` a tiling photo layer. `build_infected.py` reuses
+the enemy builder's parts on the realistic bodies and writes `models/Strain_*.glb` plus the
+diseased skins.
+
 ## Look
 
-Pseudo-retro with modern technique: low-poly geometry, 64 px nearest-filtered textures, vertex
-snapping, a fixed internal resolution (540p by default) upscaled to the window,
-ordered dithering and a reduced palette per district — combined with volumetric fog and light
-shafts, a sun shadow map, a shadow-casting key point light, GPU-instanced particles, bloom,
-screen-space distortion for rifts and magic, procedural animation (two-bone IK with planted feet,
-verlet tendrils, spring secondary motion), hit-stop and camera shake.
+Grounded and photographic. The scene pass is physically based: GGX specular with height-correlated
+Smith visibility, photo materials with normal and roughness maps (cotangent-frame normal mapping,
+no stored tangents), soft Poisson-PCF sun shadows, a shadow-casting key point light, hemispheric
+and reflective ambient, wrap-lit subsurface scattering for skin and flesh, wet streets with
+mirror puddles, and blood that soaks into bodies as they are hurt. Textures are trilinear with
+16x anisotropy at the window's native resolution.
 
-Graphics settings: internal resolution, shadow quality, fog quality, particle density, V-sync and
-windowed / borderless / fullscreen.
+The post pass adds screen-space ambient occlusion, then ray-marches **dense, heterogeneous
+volumetric fog**: a mist that hugs the street, a base haze, and a smog layer that thickens with
+altitude so upper floors and rooftops sink into it, broken into drifting banks by 3D noise and
+cut by sun shafts through the shadow map (Henyey-Greenstein phase) and halos around lamps. Then
+camera motion blur, depth of field focused on the player, bloom, ACES tonemapping, a muted grade,
+film grain and a half-LSB dither against banding.
+
+The camera is cinematic: damped follow with look-ahead and shoulder framing, a lens and distance
+that react to sprinting, charging and fights, impact kicks with a little roll, handheld sway,
+rotational shake, and a slow-motion kill cam on finishing blows. Hits land with short,
+weight-scaled hit-stop, a directional flinch through the spine, blood spray, mist and gore;
+there are no damage numbers or white hit flashes unless turned on in the settings.
+
+Graphics settings: render resolution (native by default), shadow quality, fog quality, particle
+density, V-sync, windowed / borderless / fullscreen, and damage numbers.
 
 ## Code map
 
@@ -170,11 +224,15 @@ windowed / borderless / fullscreen.
 | --- | --- |
 | `render/` | wgpu renderer, WGSL shaders, procedural textures and primitive meshes |
 | `world/` | districts, building kit, chunk streaming, rift dungeons |
-| `anim.rs` | skinned-character controller (clip selection, crossfades, attack sync), procedural growths, IK, verlet chains |
+| `anim.rs` | skinned-character controller (clip selection, crossfades, attack sync, hit flinch, severed parts), procedural growths, IK, verlet chains |
+| `ragdoll.rs` | Verlet ragdolls built from a model's skeleton |
 | `render/model.rs` | glTF loading, skeletons, clip sampling and retargeting |
-| `tools/blender/` | Blender builder and recipes for the custom infected |
+| `tools/blender/` | Blender builder and recipes for the custom infected, and the realism pass for every character |
 | `assets.rs`, `build.rs` | embedded asset table, PNG and WAV decoding |
 | `game/combat.rs` | action phases, melee resolution, damage pipeline, projectiles, zones |
+| `game/gore.rs` | per-creature dismemberment, gibs, arterial bleeding, blood pools |
+| `game/debris.rs` | loose clutter and breakable props that shatter into fragments |
+| `game/camera.rs` | cinematic third-person camera |
 | `game/ai.rs` | perception, steering, archetypes, affixes, soldiers, civilians, bosses |
 | `game/spawn.rs` | procedural enemy assembly, spawning, drops |
 | `game/magic.rs` | spells and Strain |
@@ -198,11 +256,15 @@ changes. `cargo test` validates the tables and the content minimums.
 close up), `bugs` (regression checks for fixed bugs),
 `roam` (walks every district checking for stuck or embedded states), `duel` (a combat bot fights a
 street pack and the first boss),
+`gore` (ragdolls and dismemberment on every body type), `smash` (props shattering), `props`
+(a vehicle and street furniture close up),
 `spells` (all 18 spells), `stress` (every mutation and unique, every archetype at every stage),
 `progress` (Husk reclaim and rising, vendor, stash, all bosses, ending, save and continue) and
 `coop` (three guests on simulated pads: moving, fighting, downed and revived, leash, rifts, leaving),
-`gore` (blood, flinches, dismemberment and gibs), `filters` (each retro filter, timed) and
-`title` / `opening`. `STRAIN_PROFILE=1` prints CPU timings.
+`blood` (blood, flinches and gibs on hits), `filters` (each retro filter, timed) and
+`title` / `opening`. `STRAIN_PROFILE=1` prints CPU
+timings; `STRAIN_FAST=1` drops to the cheapest graphics settings for long runs on software
+rendering.
 
 ## Releases
 

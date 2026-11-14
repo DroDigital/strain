@@ -26,13 +26,17 @@ pub struct Settings {
     pub music: f32,
     pub fov: f32,
     pub shake: f32,
-    /// floating damage numbers (off by default: wounds and blood carry the feedback)
+    /// floating damage numbers and combat callouts (off: the hit itself is the feedback)
     #[serde(default)]
     pub damage_numbers: bool,
+    /// bumped when defaults change in a way old settings files should pick up
+    #[serde(default)]
+    pub version: u32,
 }
+pub const SETTINGS_VERSION: u32 = 2;
 impl Default for Settings {
     fn default() -> Self {
-        Settings { gfx: GfxSettings::default(), bindings: Bindings::default(), master: 0.8, music: 0.6, fov: 70.0, shake: 1.0, damage_numbers: false }
+        Settings { gfx: GfxSettings::default(), bindings: Bindings::default(), master: 0.8, music: 0.6, fov: 70.0, shake: 1.0, damage_numbers: false, version: SETTINGS_VERSION }
     }
 }
 
@@ -57,7 +61,21 @@ fn read(name: &str) -> Option<String> {
 }
 
 pub fn load_settings() -> Settings {
-    read("settings.ron").and_then(|s| ron::from_str(&s).ok()).unwrap_or_default()
+    let mut s: Settings = read("settings.ron").and_then(|s| ron::from_str(&s).ok()).unwrap_or_default();
+    if s.version < 2 {
+        // the low-resolution retro look is gone: render at the window's resolution
+        s.gfx.internal_height = 0;
+        s.version = SETTINGS_VERSION;
+    }
+    if std::env::var("STRAIN_FAST").is_ok() {
+        // long scripted runs on software rendering (CI, build machines): the cheapest picture
+        s.gfx.internal_height = 360;
+        s.gfx.shadow_quality = 0;
+        s.gfx.fog_quality = 0;
+        s.gfx.particle_density = 0;
+        s.gfx.vsync = false;
+    }
+    s
 }
 pub fn save_settings(s: &Settings) {
     if let Ok(t) = ron::ser::to_string_pretty(s, Default::default()) {

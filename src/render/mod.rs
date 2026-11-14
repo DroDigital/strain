@@ -1,6 +1,7 @@
-//! Hand-written wgpu renderer: retro scene pass (vertex snapping, affine wobble, nearest textures),
-//! sun shadow map, GPU-instanced meshes and particles, volumetric fog + bloom + distortion +
-//! ordered-dither post, fixed internal resolution upscaled to the window, UI overlay.
+//! Hand-written wgpu renderer: physically based scene pass (GGX specular, normal-mapped photo
+//! materials, soft sun shadows, subsurface wrap for skin), point-light shadow atlas, GPU-instanced
+//! meshes and particles, then a post pass with SSAO, ray-marched heterogeneous volumetric fog,
+//! bloom, distortion, ACES tonemapping and film grain, and a UI overlay.
 pub mod mesh;
 pub mod model;
 pub mod textures;
@@ -23,6 +24,7 @@ pub enum WindowMode {
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct GfxSettings {
+    /// render height in pixels; 0 renders at the window's native resolution
     pub internal_height: u32,
     pub shadow_quality: u8,
     pub fog_quality: u8,
@@ -35,16 +37,23 @@ pub struct GfxSettings {
 }
 impl Default for GfxSettings {
     fn default() -> Self {
-        GfxSettings { internal_height: 540, shadow_quality: 2, fog_quality: 1, particle_density: 1, vsync: true, window_mode: WindowMode::Windowed, filter: 0 }
+        GfxSettings { internal_height: 0, shadow_quality: 2, fog_quality: 1, particle_density: 1, vsync: true, window_mode: WindowMode::Windowed, filter: 0 }
     }
 }
 pub const FILTER_NAMES: [&str; 4] = ["NONE", "TRINITRON", "CAMCORDER", "32-BIT"];
 impl GfxSettings {
     /// Each retro filter renders the scene at its own native resolution (cheaper), never above
     /// the chosen internal resolution.
+    /// Render height for a window `window_h` pixels tall: the chosen height (0 = native), capped
+    /// by the retro filter's own native resolution.
+    pub fn scene_height_for(&self, window_h: u32) -> u32 {
+        let want = if self.internal_height == 0 { window_h } else { self.internal_height };
+        let cap = [u32::MAX, 360, 288, 240][self.filter.min(3) as usize];
+        want.min(cap).max(1)
+    }
+    /// The capped height when one applies (for menus and logs); 0 = native.
     pub fn scene_height(&self) -> u32 {
-        let cap = [1080, 360, 288, 240][self.filter.min(3) as usize];
-        self.internal_height.min(cap)
+        if self.filter == 0 { self.internal_height } else { self.scene_height_for(self.internal_height.max(1080)) }
     }
     pub fn particle_scale(&self) -> f32 {
         [0.4, 1.0, 1.6][self.particle_density.min(2) as usize]
@@ -75,6 +84,10 @@ struct Globals {
     distort2: [[f32; 4]; 8],
     key_vp: [[f32; 16]; 6],
     key: [f32; 4],
+    fog2: [f32; 4],
+    wind: [f32; 4],
+    prev_vp: [f32; 16],
+    lens: [f32; 4],
     /// retro filter, window width, window height, unused
     post: [f32; 4],
 }
@@ -118,15 +131,31 @@ pub struct Env {
     pub ambient: Vec3,
     pub fog_col: Vec3,
     pub fog_density: f32,
+    /// height falloff of the street-level mist (1/m)
     pub fog_height: f32,
+    /// extra density of the street-level mist, relative to the base layer
+    pub ground_mist: f32,
+    /// the elevated smog layer starts thickening at this height and is fully dense at the second
+    pub fog_elev: (f32, f32),
+    /// density of the elevated layer, relative to the base layer
+    pub fog_elev_mult: f32,
+    /// how strongly drifting noise breaks the fog into banks (0 = uniform)
+    pub fog_noise: f32,
+    /// fog drift in m/s (y = rise)
+    pub wind: Vec3,
+    pub exposure: f32,
+    pub grain: f32,
+    /// depth of field: focus distance (m) and strength (0 = off)
+    pub dof_focus: f32,
+    pub dof: f32,
+    /// camera motion blur strength (0 = off)
+    pub motion_blur: f32,
     pub shaft: f32,
     pub light_scatter: f32,
     pub wetness: f32,
     pub warp: f32,
     pub grade: Vec3,
     pub saturation: f32,
-    pub levels: f32,
-    pub dither: f32,
     pub vignette: f32,
     pub strain: f32,
     pub fade: f32,
@@ -140,16 +169,24 @@ impl Default for Env {
             ambient: Vec3::splat(0.2),
             fog_col: Vec3::new(0.1, 0.12, 0.15),
             fog_density: 0.02,
-            fog_height: 0.05,
+            fog_height: 0.45,
+            ground_mist: 1.4,
+            fog_elev: (5.0, 26.0),
+            fog_elev_mult: 3.2,
+            fog_noise: 0.75,
+            wind: Vec3::new(1.1, 0.12, 0.45),
+            exposure: 1.0,
+            grain: 0.035,
+            dof_focus: 4.0,
+            dof: 0.0,
+            motion_blur: 0.0,
             shaft: 1.0,
             light_scatter: 1.0,
             wetness: 0.5,
             warp: 0.0,
             grade: Vec3::ONE,
             saturation: 1.0,
-            levels: 24.0,
-            dither: 1.0,
-            vignette: 0.5,
+            vignette: 0.35,
             strain: 0.0,
             fade: 0.0,
             flash: 0.0,
@@ -245,6 +282,10 @@ pub struct Renderer {
     l_post: wgpu::BindGroupLayout,
     l_src: wgpu::BindGroupLayout,
     tex_array: wgpu::Texture,
+    mat_array: wgpu::Texture,
+    mat_view: wgpu::TextureView,
+    char_albedo_view: wgpu::TextureView,
+    char_mat_view: wgpu::TextureView,
     tex_view: wgpu::TextureView,
     samp_nearest_rep: wgpu::Sampler,
     samp_nearest: wgpu::Sampler,
@@ -289,6 +330,7 @@ pub struct Renderer {
     ui_cap: u64,
     inst_scratch: Vec<Instance>,
     srgb_surface: bool,
+    prev_vp: Option<Mat4>,
     pub capture: Option<std::path::PathBuf>,
     pub adapter_info: String,
 }
@@ -297,7 +339,7 @@ const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const LDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const KEY_FACE: u32 = 512;
-const TEX_MIPS: u32 = 7;
+const TEX_MIPS: u32 = 10;
 
 fn tex_entry(binding: u32, ty: wgpu::BindingType) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::FRAGMENT, ty, count: None }
@@ -391,7 +433,17 @@ impl Renderer {
         use wgpu::TextureViewDimension as D;
         let l_scene = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene"),
-            entries: &[tex_entry(0, bt_tex(D::D2Array, false)), tex_entry(1, bt_samp(false)), tex_entry(2, bt_tex(D::D2, true)), tex_entry(3, bt_samp(true)), tex_entry(4, bt_tex(D::D2, true)), tex_entry(5, bt_tex(D::D2, false))],
+            entries: &[
+                tex_entry(0, bt_tex(D::D2Array, false)),
+                tex_entry(1, bt_samp(false)),
+                tex_entry(2, bt_tex(D::D2, true)),
+                tex_entry(3, bt_samp(true)),
+                tex_entry(4, bt_tex(D::D2, true)),
+                tex_entry(5, bt_tex(D::D2, false)),
+                tex_entry(6, bt_tex(D::D2Array, false)),
+                tex_entry(7, bt_tex(D::D2Array, false)),
+                tex_entry(8, bt_tex(D::D2Array, false)),
+            ],
         });
         let l_post = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("post"),
@@ -618,7 +670,18 @@ impl Renderer {
                 ..Default::default()
             })
         };
-        let samp_nearest_rep = samp(wgpu::FilterMode::Nearest, true, false);
+        // material sampler: trilinear with 16x anisotropy, so photo textures stay sharp at grazing angles
+        let samp_nearest_rep = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("material"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            anisotropy_clamp: 16,
+            ..Default::default()
+        });
         let samp_nearest = samp(wgpu::FilterMode::Nearest, false, false);
         let samp_linear = samp(wgpu::FilterMode::Linear, false, false);
         let samp_shadow = samp(wgpu::FilterMode::Linear, false, true);
@@ -635,6 +698,55 @@ impl Renderer {
             view_formats: &[],
         });
         let tex_view = tex_array.create_view(&wgpu::TextureViewDescriptor { dimension: Some(D::D2Array), ..Default::default() });
+        let mat_array = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("material array"),
+            size: wgpu::Extent3d { width: TEX as u32, height: TEX as u32, depth_or_array_layers: Tex::Count as u32 },
+            mip_level_count: mips,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mat_view = mat_array.create_view(&wgpu::TextureViewDescriptor { dimension: Some(D::D2Array), ..Default::default() });
+        // per-character textures: skin, eyes, hair (uploaded once, with mips)
+        let char_names = textures::char_names();
+        let char_layers = char_names.len().max(1) as u32;
+        let char_mips = (textures::CHAR_TEX as f32).log2() as u32 + 1;
+        let mk_char = |label: &str, format: wgpu::TextureFormat| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: textures::CHAR_TEX as u32, height: textures::CHAR_TEX as u32, depth_or_array_layers: char_layers },
+                mip_level_count: char_mips,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+        let char_albedo = mk_char("character albedo", wgpu::TextureFormat::Rgba8UnormSrgb);
+        let char_mat = mk_char("character material", wgpu::TextureFormat::Rgba8Unorm);
+        for (layer, name) in char_names.iter().enumerate() {
+            let (a, m) = textures::char_texture(name);
+            for (tex, mut data, cutout) in [(&char_albedo, a, true), (&char_mat, m, false)] {
+                let mut size = textures::CHAR_TEX;
+                for mip in 0..char_mips {
+                    queue.write_texture(
+                        wgpu::TexelCopyTextureInfo { texture: tex, mip_level: mip, origin: wgpu::Origin3d { x: 0, y: 0, z: layer as u32 }, aspect: wgpu::TextureAspect::All },
+                        &data,
+                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size as u32 * 4), rows_per_image: Some(size as u32) },
+                        wgpu::Extent3d { width: size as u32, height: size as u32, depth_or_array_layers: 1 },
+                    );
+                    if size > 1 {
+                        data = textures::downsample(&data, size, cutout);
+                        size /= 2;
+                    }
+                }
+            }
+        }
+        let char_albedo_view = char_albedo.create_view(&wgpu::TextureViewDescriptor { dimension: Some(D::D2Array), ..Default::default() });
+        let char_mat_view = char_mat.create_view(&wgpu::TextureViewDescriptor { dimension: Some(D::D2Array), ..Default::default() });
 
         let shadow_size = Self::shadow_px(&settings);
         let (_, shadow_view) = make_tex(&device, shadow_size, shadow_size, DEPTH, "shadow");
@@ -664,7 +776,7 @@ impl Renderer {
             &atlas.px,
         );
         let atlas_view = atlas_tex.create_view(&Default::default());
-        let g1_scene = Self::scene_bg(&device, &l_scene, &tex_view, &samp_nearest_rep, &shadow_view, &samp_shadow, &key_view, &atlas_view);
+        let g1_scene = Self::scene_bg(&device, &l_scene, &[&tex_view, &mat_view, &char_albedo_view, &char_mat_view], &samp_nearest_rep, &shadow_view, &samp_shadow, &key_view, &atlas_view);
 
         // UI atlas
         let ui_tex = device.create_texture_with_data(
@@ -711,6 +823,10 @@ impl Renderer {
             l_post,
             l_src,
             tex_array,
+            mat_array,
+            mat_view,
+            char_albedo_view,
+            char_mat_view,
             tex_view,
             samp_nearest_rep,
             samp_nearest,
@@ -755,6 +871,7 @@ impl Renderer {
             ui_cap,
             inst_scratch: Vec::new(),
             srgb_surface,
+            prev_vp: None,
             capture: None,
             adapter_info,
         }
@@ -769,17 +886,20 @@ impl Renderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn scene_bg(device: &wgpu::Device, l: &wgpu::BindGroupLayout, tex: &wgpu::TextureView, s: &wgpu::Sampler, shadow: &wgpu::TextureView, ss: &wgpu::Sampler, key: &wgpu::TextureView, atlas: &wgpu::TextureView) -> wgpu::BindGroup {
+    fn scene_bg(device: &wgpu::Device, l: &wgpu::BindGroupLayout, arrays: &[&wgpu::TextureView; 4], s: &wgpu::Sampler, shadow: &wgpu::TextureView, ss: &wgpu::Sampler, key: &wgpu::TextureView, atlas: &wgpu::TextureView) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: l,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(tex) },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(arrays[0]) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(s) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(shadow) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(ss) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(key) },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(atlas) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(arrays[1]) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(arrays[2]) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(arrays[3]) },
             ],
         })
     }
@@ -796,9 +916,11 @@ impl Renderer {
         shadow: &wgpu::TextureView,
         ss: &wgpu::Sampler,
     ) -> Targets {
-        let h = s.scene_height().clamp(240, 1080);
-        let aspect = (config.width as f32 / config.height.max(1) as f32).clamp(1.0, 2.4);
-        let w = ((h as f32 * aspect) as u32 + 1) & !1;
+        let want = s.scene_height_for(config.height.max(1));
+        let native = want >= config.height;
+        let h = if native { config.height.max(1) } else { want.clamp(200, 2160) };
+        let aspect = (config.width as f32 / config.height.max(1) as f32).clamp(0.5, 3.0);
+        let w = if native { config.width.max(1) } else { ((h as f32 * aspect) as u32 + 1) & !1 };
         let (_, scene_view) = make_tex(device, w, h, HDR, "scene");
         let (_, depth_view) = make_tex(device, w, h, DEPTH, "depth");
         let (ldr, ldr_view) = make_tex(device, w, h, LDR, "ldr");
@@ -826,7 +948,8 @@ impl Renderer {
             ],
         });
         let bloom_bgs = [src(&scene_view, lin), src(&b0, lin), src(&b1, lin)];
-        let blit_bg = src(&ldr_view, near);
+        let _ = near;
+        let blit_bg = src(&ldr_view, lin);
         Targets { w, h, scene_view, depth_view, ldr, ldr_view, bloom_views: [b0, b1, b2], post_bg, bloom_bgs, blit_bg }
     }
 
@@ -853,7 +976,7 @@ impl Renderer {
         if old.shadow_quality != s.shadow_quality {
             self.shadow_size = Self::shadow_px(s);
             self.shadow_view = make_tex(&self.device, self.shadow_size, self.shadow_size, DEPTH, "shadow").1;
-            self.g1_scene = Self::scene_bg(&self.device, &self.l_scene, &self.tex_view, &self.samp_nearest_rep, &self.shadow_view, &self.samp_shadow, &self.key_view, &self.atlas_view);
+            self.g1_scene = Self::scene_bg(&self.device, &self.l_scene, &[&self.tex_view, &self.mat_view, &self.char_albedo_view, &self.char_mat_view], &self.samp_nearest_rep, &self.shadow_view, &self.samp_shadow, &self.key_view, &self.atlas_view);
         }
         self.rebuild_targets();
     }
@@ -872,17 +995,21 @@ impl Renderer {
 
     /// Generate and upload one texture array layer (with mips). Called incrementally by the loader.
     pub fn upload_layer(&mut self, layer: Tex) {
-        let mut data = textures::generate(layer);
-        let mut size = TEX;
-        for mip in 0..TEX_MIPS {
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo { texture: &self.tex_array, mip_level: mip, origin: wgpu::Origin3d { x: 0, y: 0, z: layer as u32 }, aspect: wgpu::TextureAspect::All },
-                &data,
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size as u32 * 4), rows_per_image: Some(size as u32) },
-                wgpu::Extent3d { width: size as u32, height: size as u32, depth_or_array_layers: 1 },
-            );
-            data = textures::downsample(&data, size);
-            size /= 2;
+        let (albedo, mat) = textures::generate(layer);
+        for (tex, mut data, cutout) in [(&self.tex_array, albedo, true), (&self.mat_array, mat, false)] {
+            let mut size = TEX;
+            for mip in 0..TEX_MIPS {
+                self.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo { texture: tex, mip_level: mip, origin: wgpu::Origin3d { x: 0, y: 0, z: layer as u32 }, aspect: wgpu::TextureAspect::All },
+                    &data,
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size as u32 * 4), rows_per_image: Some(size as u32) },
+                    wgpu::Extent3d { width: size as u32, height: size as u32, depth_or_array_layers: 1 },
+                );
+                if size > 1 {
+                    data = textures::downsample(&data, size, cutout);
+                    size /= 2;
+                }
+            }
         }
     }
 
@@ -960,18 +1087,16 @@ impl Renderer {
         g.sun_col = e.sun_col.extend(e.wetness).into();
         g.ambient = e.ambient.extend(e.warp).into();
         g.fog_col = e.fog_col.extend(e.fog_density).into();
-        let steps = [6.0, 12.0, 24.0][self.settings.fog_quality.min(2) as usize];
-        g.fog_par = [e.fog_height, steps, 110.0, e.light_scatter];
-        g.screen = [t.w as f32, t.h as f32, 1.0, 0.0];
+        let steps = [20.0, 36.0, 64.0][self.settings.fog_quality.min(2) as usize];
+        g.fog_par = [e.fog_height, steps, 150.0, e.light_scatter];
+        g.fog2 = [e.fog_elev.0, e.fog_elev.1, e.fog_elev_mult, e.fog_noise];
+        g.wind = e.wind.extend(e.ground_mist).into();
+        g.prev_vp = self.prev_vp.unwrap_or(vp).to_cols_array();
+        self.prev_vp = Some(vp);
+        g.lens = [e.dof_focus, e.dof, e.motion_blur, 0.0];
+        g.screen = [t.w as f32, t.h as f32, 0.0, e.exposure];
         g.grade = e.grade.extend(e.saturation).into();
-        g.fx = [e.levels * 2.0, e.dither, e.vignette, e.strain];
-        match self.settings.filter {
-            // 15-bit colour with ordered dithering, like the 32-bit consoles
-            3 => g.fx = [31.0, 1.4, e.vignette, e.strain],
-            // tape and tubes soften banding on their own
-            1 | 2 => g.fx[0] = e.levels * 3.0,
-            _ => {}
-        }
+        g.fx = [e.grain, 0.0, e.vignette, e.strain];
         g.post = [self.settings.filter as f32, self.config.width as f32, self.config.height as f32, 0.0];
         let nl = f.lights.len().min(32);
         let nd = f.distorts.len().min(8);

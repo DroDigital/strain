@@ -146,35 +146,37 @@ impl Game {
         let seed = self.w.rig.get(e).map(|r| r.plan.seed).unwrap_or(1);
         let pick = |opts: &[&'static str]| opts[(seed as usize) % opts.len()];
         let arch = foe.as_ref().map(|f| self.t.archetypes[f.arch].id.clone()).unwrap_or_default();
-        let humans = ["Human_Matt", "Human_Lis", "Human_Sam", "Human_Shaun"];
+        let humans = ["Human_Civilian_M1", "Human_Civilian_M2", "Human_Civilian_F1", "Human_Civilian_F2"];
         // Strain_* models are the custom infected built in Blender (tools/blender): their mutations
         // are modelled in, so they hide no bones and drop the archetype's procedural growths
         let (model, kind, scale, crawl, gun, tint): (&str, SkinKind, f32, bool, bool, [f32; 3]) = if e == self.player {
             ("Human_Player", SkinKind::Human, 1.0, false, false, [1.0; 3])
         } else if let Some(slot) = guest {
-            (["Human_Lis", "Human_Sam", "Human_Shaun"][(slot as usize).saturating_sub(1).min(2)], SkinKind::Human, 1.0, false, false, [1.0; 3])
+            // co-op guests: survivors from the city, each one distinct
+            (["Human_Civilian_M2", "Human_Civilian_F1", "Human_Soldier_M"][(slot as usize).saturating_sub(1).min(2)], SkinKind::Human, 1.0, false, false, [1.0; 3])
         } else if foe.as_ref().map(|f| f.mimic).unwrap_or(false) {
             (pick(&humans), SkinKind::Human, 1.0, false, false, [1.0; 3])
         } else if foe.as_ref().map(|f| f.husk).unwrap_or(false) {
             ("Human_Player", SkinKind::Human, 1.0, false, false, [0.45, 0.4, 0.5])
         } else if let Some(bi) = foe.as_ref().and_then(|f| f.boss) {
             let m = ["Strain_Digestor", "Strain_Geometer", "Strain_MotherCinder", "Strain_Cantor", "Strain_Seed"][bi.min(4)];
-            (m, SkinKind::Zombie, if bi == 4 { 0.85 } else { 1.0 }, false, false, [1.0; 3])
+            // bosses tower over a person
+            (m, SkinKind::Zombie, if bi == 4 { 1.6 } else { 1.5 }, false, false, [1.0; 3])
         } else {
             match ai {
-                AiKind::Soldier => (pick(&["Human_Shaun", "Human_Sam"]), SkinKind::Human, 1.0, false, true, [0.82, 0.9, 0.76]),
-                AiKind::Civilian => (pick(&humans), SkinKind::Human, 0.97, false, false, [1.0; 3]),
-                AiKind::Ally => ("Strain_Larva", SkinKind::Zombie, 0.65, false, false, [0.6, 1.0, 0.6]),
-                AiKind::Crawler => ("Strain_Larva", SkinKind::Zombie, 0.75, false, false, [1.0; 3]),
-                AiKind::Leaper if arch == "leaper" => ("Strain_Skitter", SkinKind::Dog, 0.7, false, false, [1.0; 3]),
-                AiKind::Brute => ("Strain_Bulk", SkinKind::Zombie, 1.1, false, false, [1.0; 3]),
+                AiKind::Soldier => (pick(&["Human_Soldier_M", "Human_Soldier_M", "Human_Soldier_F"]), SkinKind::Human, 1.0, false, true, [1.0; 3]),
+                AiKind::Civilian => (pick(&humans), SkinKind::Human, 1.0, false, false, [1.0; 3]),
+                AiKind::Ally => ("Strain_Larva", SkinKind::Zombie, 0.8, true, false, [0.6, 1.0, 0.6]),
+                AiKind::Crawler => ("Strain_Larva", SkinKind::Zombie, 0.95, true, false, [1.0; 3]),
+                AiKind::Leaper if arch == "leaper" => ("Strain_Skitter", SkinKind::Zombie, 0.98, false, false, [1.0; 3]),
+                AiKind::Brute => ("Strain_Bulk", SkinKind::Zombie, 1.18, false, false, [1.0; 3]),
                 AiKind::Summoner => ("Strain_Matron", SkinKind::Zombie, 1.05, false, false, [1.0; 3]),
                 AiKind::Spitter => ("Strain_Retch", SkinKind::Zombie, 1.0, false, false, [1.0; 3]),
-                AiKind::Ambusher => ("Strain_Lurker", SkinKind::Zombie, 0.85, false, false, [1.0; 3]),
+                AiKind::Ambusher => ("Strain_Lurker", SkinKind::Zombie, 1.06, false, false, [1.0; 3]),
                 AiKind::Shielded => ("Strain_Bulwark", SkinKind::Zombie, 1.1, false, false, [1.0; 3]),
                 _ => match pick(&["Strain_Carrier", "Strain_Shambler", "Strain_Carrier"]) {
-                    "Strain_Shambler" => ("Strain_Shambler", SkinKind::Zombie, 0.85, false, false, [1.0; 3]),
-                    m => (m, SkinKind::Zombie, 1.05, false, false, [1.0; 3]),
+                    "Strain_Shambler" => ("Strain_Shambler", SkinKind::Zombie, 1.0, false, false, [1.0; 3]),
+                    m => (m, SkinKind::Zombie, 1.0, false, false, [1.0; 3]),
                 },
             }
         };
